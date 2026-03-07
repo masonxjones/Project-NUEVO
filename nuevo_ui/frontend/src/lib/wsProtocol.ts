@@ -38,8 +38,6 @@ export interface SystemStatusData {
   loopTimeAvgUs: number
   loopTimeMaxUs: number
   uartRxErrors: number
-  wheelDiameterMm: number
-  wheelBaseMm: number
   motorDirMask: number
   neoPixelCount: number
   heartbeatTimeoutMs: number
@@ -152,4 +150,45 @@ export interface KinematicsData {
   vy: number     // mm/s
   vTheta: number // rad/s
   timestamp: number
+}
+
+// ============================================================================
+// Incoming — IMU (imu topic)
+// ============================================================================
+
+export interface IMUData {
+  quatW: number
+  quatX: number
+  quatY: number
+  quatZ: number
+  earthAccX: number   // g
+  earthAccY: number   // g
+  earthAccZ: number   // g
+  rawAccX: number     // mg
+  rawAccY: number     // mg
+  rawAccZ: number     // mg
+  rawGyroX: number    // 0.1 DPS
+  rawGyroY: number    // 0.1 DPS
+  rawGyroZ: number    // 0.1 DPS
+  magX: number        // µT
+  magY: number        // µT
+  magZ: number        // µT
+  magCalibrated: number
+  timestamp: number
+}
+
+// ============================================================================
+// Incoming — Magnetometer calibration (mag_cal_status topic)
+// ============================================================================
+
+export interface MagCalStatusData {
+  state: number        // 0=idle 1=sampling 2=complete 3=saved 4=error
+  sampleCount: number
+  minX: number; maxX: number
+  minY: number; maxY: number
+  minZ: number; maxZ: number
+  offsetX: number
+  offsetY: number
+  offsetZ: number
+  savedToEeprom: number
 }

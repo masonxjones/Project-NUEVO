@@ -14,6 +14,8 @@ import type {
   ServoStatusAllData,
   IOStatusData,
   KinematicsData,
+  IMUData,
+  MagCalStatusData,
 } from '../lib/wsProtocol'
 
 interface DCMotorState {
@@ -38,6 +40,8 @@ interface RobotState {
   servo: ServoStatusAllData | null
   io: IOStatusData | null
   kinematics: KinematicsData | null
+  imu: IMUData | null
+  magCal: MagCalStatusData | null
   dispatch: (topic: string, data: any, ts?: number) => void
   setMotorRecording: (motorIdx: number, active: boolean) => void
 }
@@ -67,6 +71,8 @@ export const useRobotStore = create<RobotState>((set) => ({
   servo: null,
   io: null,
   kinematics: null,
+  imu: null,
+  magCal: null,
 
   setMotorRecording: (motorIdx: number, active: boolean) => {
     set((state) => {
@@ -192,6 +198,14 @@ export const useRobotStore = create<RobotState>((set) => ({
 
       case 'kinematics':
         set({ kinematics: data as KinematicsData })
+        break
+
+      case 'imu':
+        set({ imu: data as IMUData })
+        break
+
+      case 'mag_cal_status':
+        set({ magCal: data as MagCalStatusData })
         break
 
       default:
