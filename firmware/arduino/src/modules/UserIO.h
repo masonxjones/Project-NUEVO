@@ -275,6 +275,17 @@ public:
     static void setNeoPixelBrightness(uint8_t brightness);
 
     /**
+     * @brief Read the currently buffered NeoPixel color.
+     *
+     * Returns the RGB color last written into the NeoPixel driver buffer. This
+     * is used for telemetry/UI mirroring and does not trigger show().
+     *
+     * @param index Pixel index
+     * @return Packed 0x00RRGGBB color
+     */
+    static uint32_t getNeoPixelColor(uint8_t index);
+
+    /**
      * @brief Enable or disable the automatic state-driven NeoPixel rendering.
      *
      * When enabled (default), update() renders the latest queued system state.
@@ -314,6 +325,7 @@ private:
     static volatile SystemState pixelState_;      // Latest queued system state
     static volatile bool        pixelStateDirty_; // True when update() should re-render state
     static bool                 neoAutoAnimate_;  // true = state-driven, false = manual
+    static uint32_t             neoPixelColors_[(NEOPIXEL_COUNT > 0) ? NEOPIXEL_COUNT : 1];
 
     // Initialization flag
     static bool initialized_;
@@ -343,6 +355,11 @@ private:
      * entry points. It only updates cached state; rendering happens in update().
      */
     static void queuePixelState(SystemState state);
+
+    /**
+     * @brief Write a NeoPixel color to both the driver buffer and local cache.
+     */
+    static void setBufferedNeoPixel(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
 
     /**
      * @brief Convert HSV to RGB (fast integer implementation, /256 approximation)

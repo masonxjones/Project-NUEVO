@@ -2,7 +2,7 @@
 
 This document describes how DC motors, steppers, encoders, odometry, and servos are implemented in the current firmware.
 
-## 1. DC Motor Control: Mixed ISR + Loop Pipeline
+## 1. DC Motor Control: Mixed ISR + Loop Round-Robin
 
 The DC motor path is intentionally split between Timer1 ISR work and loop-side compute.
 
@@ -29,25 +29,32 @@ The ISR in `arduino.ino` does three things:
 `servicePidIsrSlice(...)` owns the real round-robin logic:
 
 - slot `0` starts a new round
-- slot `0` can publish staged outputs for the new round
-- the current motor's feedback is latched
-- the current motor's already-prepared output is applied
+- the current motor's previously prepared output is published if ready
+- the current motor's already-published output is applied
+- the current motor's encoder feedback is latched
+- that same motor is queued for one loop-side compute pass
 - the slot index is advanced for the next Timer1 tick
 - when the last slot closes a running round, the full round span is returned for `pidr`
 
 ### What happens in loop context
 
-The fast lane calls `fastMotorCompute()`, which calls `taskMotors()` whenever `MotorControlCoordinator` reports a new round is ready.
+The fast lane calls `fastMotorCompute()`, which calls `taskMotors()` whenever
+`MotorControlCoordinator` reports a pending motor slot.
 
-`taskMotors()` computes the next DC output set in software and stages it for the next publish.
+`taskMotors()` now computes exactly one motor per invocation and stages the next
+output for that same motor only. If a small backlog exists, it may compute a
+few pending motor slots in one pass, but only within a bounded wall-clock
+budget so the loop does not regress to the old 4-motor batch behavior.
 
-This is a fixed one-round pipeline:
+So the pipeline is:
 
-- round `N` is being applied
-- loop computes round `N+1`
-- slot `0` of the next round publishes round `N+1`
+- slot `N` applies motor `i` using the output previously published for motor `i`
+- slot `N` latches fresh feedback for motor `i`
+- loop computes motor `i`
+- the next time motor `i` returns `5 ms` later, its staged output is published
 
-That gives predictable latency and much lower jitter than a just-in-time handoff.
+This keeps each motor at `200 Hz`, but removes the earlier 4-motor batch
+compute deadline from the loop.
 
 ## 2. `MotorControlCoordinator`
 
@@ -57,10 +64,9 @@ It owns:
 
 - current ISR slot
 - round count
-- requested/computed/applied round numbers
+- requested/computed/applied slot-request counters
 - compute/apply sequence counters
-- whether a round is ready for compute
-- whether staged outputs are ready for publish
+- per-slot pending request state
 - per-window handoff counters used by `StatusReporter`
 
 The status line:
@@ -71,10 +77,10 @@ comes directly from this module.
 
 The `ControlWin` counters mean:
 
-- `missed`: a new round arrived while a previous one was still waiting for compute
-- `late`: compute started in the final pre-publish slot
-- `reused`: a round had to reuse the previous output because new output was not ready
-- `cross`: compute finished after the requested round boundary was already crossed
+- `missed`: a motor slot came around again before its previous request had even started or finished compute
+- `late`: compute started after that motor's `5 ms` deadline window had already been crossed
+- `reused`: a motor slot had to reuse its previous published output because the new one was not ready
+- `cross`: compute finished after a newer request for the same motor had already arrived
 
 ## 3. `DCMotor`
 
@@ -112,6 +118,12 @@ Supported modes:
   - writes already-prepared drive state to the H-bridge output pins / OCR register
 
 This split is the main reason the current DC path fits within the UART-safe ISR budget.
+
+### Current-sense note
+
+The driver still contains optional current-sense support, but the active
+`v0.9.5` control profile has `DC_CURRENT_SENSE_ENABLED = 0`, so the loop-side
+motor service path does not spend ADC time sampling CT pins.
 
 ### Fixed-point control implementation
 

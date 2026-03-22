@@ -18,6 +18,8 @@ extern DCMotor dcMotors[NUM_DC_MOTORS];
 
 namespace {
 
+constexpr uint8_t LIVEFLAG_CONTROL_MISS = 0x80U;
+
 struct StatusSnapshot {
     SystemState state;
     uint8_t liveFlags;
@@ -201,7 +203,8 @@ void formatErrorFlags(uint8_t flags, char *buffer, size_t size) {
     if (flags & ERR_I2C_ERROR)     appendToken(buffer, size, first, "I2C");
     if (flags & ERR_IMU_ERROR)     appendToken(buffer, size, first, "IMU");
     if (flags & ERR_LIVENESS_LOST) appendToken(buffer, size, first, "HB");
-    if (flags & ERR_LOOP_OVERRUN)  appendToken(buffer, size, first, "LOOP");
+    if (flags & ERR_LOOP_OVERRUN)     appendToken(buffer, size, first, "LOOP");
+    if (flags & LIVEFLAG_CONTROL_MISS) appendToken(buffer, size, first, "CTRL");
     if (first) {
         strlcpy(buffer, "none", size);
     }
@@ -326,9 +329,6 @@ uint8_t computeLiveErrorFlags(SystemState state) {
     if (!MessageCenter::isHeartbeatValid() && state == SystemState::SYS_STATE_RUNNING)
                                             flags |= ERR_LIVENESS_LOST;
     if (ServoController::hasI2CError())        flags |= ERR_I2C_ERROR;
-#if IMU_ENABLED
-    if (!SensorManager::isIMUAvailable())      flags |= ERR_IMU_ERROR;
-#endif
     if (LoopMonitor::getLiveFaultMask() != 0U) flags |= ERR_LOOP_OVERRUN;
     for (uint8_t i = 0; i < NUM_DC_MOTORS; i++) {
         if (dcMotors[i].isEncoderFailed()) {
@@ -408,9 +408,9 @@ void StatusReporter::task() {
     static uint32_t prevCrossRoundComputeCount = 0;
 
     uint32_t t0 = micros();
-    StatusSnapshot snapshot = {};
+    StatusSnapshot &snapshot = g_statusSnapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
     snapshot.state = SystemManager::getState();
-    uint8_t liveFlags = computeLiveErrorFlags(snapshot.state);
     uint8_t faultMask = LoopMonitor::getLiveFaultMask();
 
     snapshot.vbatMv = (uint16_t)(SensorManager::getBatteryVoltage() * 1000.0f);
@@ -424,7 +424,6 @@ void StatusReporter::task() {
     snapshot.servoI2CError = ServoController::hasI2CError();
     snapshot.batteryStateCode = batteryStateCode();
     snapshot.servoRailStateCode = servoRailStateCode();
-    snapshot.liveFlags = liveFlags;
     snapshot.latchedFlags = MessageCenter::getFaultLatchFlags();
     snapshot.loopFaultMask = faultMask;
 
@@ -460,6 +459,14 @@ void StatusReporter::task() {
     prevLateComputeCount += snapshot.lateComputeDelta;
     prevReusedOutputCount += snapshot.reusedOutputDelta;
     prevCrossRoundComputeCount += snapshot.crossRoundDelta;
+
+    snapshot.liveFlags = computeLiveErrorFlags(snapshot.state);
+    if (snapshot.missedRoundDelta != 0U ||
+        snapshot.lateComputeDelta != 0U ||
+        snapshot.reusedOutputDelta != 0U ||
+        snapshot.crossRoundDelta != 0U) {
+        snapshot.liveFlags |= LIVEFLAG_CONTROL_MISS;
+    }
 
     snapshot.heartbeatAgeMs = MessageCenter::getTimeSinceHeartbeat();
     snapshot.heartbeatTimeoutMs = MessageCenter::getHeartbeatTimeoutMs();
@@ -532,7 +539,6 @@ void StatusReporter::task() {
     snapshot.txPending = MessageCenter::getTxPendingBytes();
     snapshot.txPeak = g_txPendingPeak;
 
-    g_statusSnapshot = snapshot;
     g_statusSnapshotPending = true;
     g_statusSnapshotChunk = 0;
 
@@ -560,59 +566,6 @@ void StatusReporter::emitChunk() {
 
     uint32_t t0 = micros();
     const StatusSnapshot &s = g_statusSnapshot;
-    uint16_t pidPeakUs;
-    uint16_t pidMaxUs;
-    uint16_t pidRoundPeakUs;
-    uint16_t pidRoundMaxUs;
-    uint16_t stepPeakUs;
-    uint16_t stepMaxUs;
-    uint16_t motorPeakUs;
-    uint16_t motorMaxUs;
-    uint16_t sensorPeakUs;
-    uint16_t sensorMaxUs;
-    uint16_t uartPeakUs;
-    uint16_t uartMaxUs;
-    uint16_t ioPeakUs;
-    uint16_t ioMaxUs;
-    uint16_t debugPeakUs;
-    uint16_t debugMaxUs;
-    uint16_t flushPeakUs;
-    uint16_t flushMaxUs;
-    uint16_t imuPeakUs;
-    uint16_t imuMaxUs;
-    uint16_t ultrasonicPeakUs;
-    uint16_t ultrasonicMaxUs;
-    char ultrasonicSummary[112];
-    char imuSummary[88];
-
-    normalizeTimingTriplet(s.pidAvgUs, s.pidPeakUs, s.pidMaxUs, pidPeakUs, pidMaxUs);
-    normalizeTimingTriplet(s.pidRoundAvgUs, s.pidRoundPeakUs, s.pidRoundMaxUs, pidRoundPeakUs, pidRoundMaxUs);
-    normalizeTimingTriplet(s.stepAvgUs, s.stepPeakUs, s.stepMaxUs, stepPeakUs, stepMaxUs);
-    normalizeTimingTriplet(s.motorAvgUs, s.motorPeakUs, s.motorMaxUs, motorPeakUs, motorMaxUs);
-    normalizeTimingTriplet(s.sensorAvgUs, s.sensorPeakUs, s.sensorMaxUs, sensorPeakUs, sensorMaxUs);
-    normalizeTimingTriplet(s.uartAvgUs, s.uartPeakUs, s.uartMaxUs, uartPeakUs, uartMaxUs);
-    normalizeTimingTriplet(s.ioAvgUs, s.ioPeakUs, s.ioMaxUs, ioPeakUs, ioMaxUs);
-    normalizeTimingTriplet(s.debugAvgUs, s.debugPeakUs, s.debugMaxUs, debugPeakUs, debugMaxUs);
-    normalizeTimingTriplet(s.flushAvgUs, s.flushPeakUs, s.flushMaxUs, flushPeakUs, flushMaxUs);
-    normalizeTimingTriplet(s.imuAvgUs, s.imuPeakUs, s.imuMaxUs, imuPeakUs, imuMaxUs);
-    normalizeTimingTriplet(s.ultrasonicAvgUs, s.ultrasonicPeakUs, s.ultrasonicMaxUs, ultrasonicPeakUs, ultrasonicMaxUs);
-    formatRangeSummary(s.ultrasonicConfiguredCount,
-                       s.ultrasonicFoundCount,
-                       s.ultrasonicFound,
-                       s.ultrasonicDistMm,
-                       SENSOR_MAX_ULTRASONICS,
-                       ultrasonicSummary,
-                       sizeof(ultrasonicSummary));
-    snprintf_P(imuSummary,
-               sizeof(imuSummary),
-               PSTR("avail=%s | mag=%s | temp=%d.%uC | az=%dmg | gz=%d.%udps"),
-               s.imuAvailable ? "1" : "0",
-               s.imuMagCalibrated ? "9DOF" : "6DOF",
-               (int)(s.imuTempDeciC / 10),
-               (unsigned)abs(s.imuTempDeciC % 10),
-               (int)s.imuRawAccZ,
-               (int)(s.imuRawGyrZ / 10),
-               (unsigned)abs(s.imuRawGyrZ % 10));
 
     switch (g_statusSnapshotChunk) {
         case 0:
@@ -686,40 +639,106 @@ void StatusReporter::emitChunk() {
             DebugLog::printf_P(PSTR("\n[TIMING] (avg/peak/max)\n"));
             break;
         case 10:
+        {
+            uint16_t pidPeakUs;
+            uint16_t pidMaxUs;
+            uint16_t pidRoundPeakUs;
+            uint16_t pidRoundMaxUs;
+            uint16_t stepPeakUs;
+            uint16_t stepMaxUs;
+            normalizeTimingTriplet(s.pidAvgUs, s.pidPeakUs, s.pidMaxUs, pidPeakUs, pidMaxUs);
+            normalizeTimingTriplet(s.pidRoundAvgUs, s.pidRoundPeakUs, s.pidRoundMaxUs, pidRoundPeakUs, pidRoundMaxUs);
+            normalizeTimingTriplet(s.stepAvgUs, s.stepPeakUs, s.stepMaxUs, stepPeakUs, stepMaxUs);
             DebugLog::printf_P(PSTR("pid %u/%u/%u (%u) us | pidr %u/%u/%u (%u) us | step %u/%u/%u (%u) us\n"),
                                s.pidAvgUs, pidPeakUs, pidMaxUs, s.pidBudgetUs,
                                s.pidRoundAvgUs, pidRoundPeakUs, pidRoundMaxUs, s.pidRoundBudgetUs,
                                s.stepAvgUs, stepPeakUs, stepMaxUs, s.stepBudgetUs);
             break;
+        }
         case 11:
+        {
+            uint16_t motorPeakUs;
+            uint16_t motorMaxUs;
+            uint16_t sensorPeakUs;
+            uint16_t sensorMaxUs;
+            normalizeTimingTriplet(s.motorAvgUs, s.motorPeakUs, s.motorMaxUs, motorPeakUs, motorMaxUs);
+            normalizeTimingTriplet(s.sensorAvgUs, s.sensorPeakUs, s.sensorMaxUs, sensorPeakUs, sensorMaxUs);
             DebugLog::printf_P(PSTR("motor %u/%u/%u (%u) us | sensor %u/%u/%u (%u) us\n"),
                                s.motorAvgUs, motorPeakUs, motorMaxUs, s.motorBudgetUs,
                                s.sensorAvgUs, sensorPeakUs, sensorMaxUs, s.sensorBudgetUs);
             break;
+        }
         case 12:
+        {
+            uint16_t uartPeakUs;
+            uint16_t uartMaxUs;
+            uint16_t ioPeakUs;
+            uint16_t ioMaxUs;
+            normalizeTimingTriplet(s.uartAvgUs, s.uartPeakUs, s.uartMaxUs, uartPeakUs, uartMaxUs);
+            normalizeTimingTriplet(s.ioAvgUs, s.ioPeakUs, s.ioMaxUs, ioPeakUs, ioMaxUs);
             DebugLog::printf_P(PSTR("uart %u/%u/%u (%u) us | io %u/%u/%u (%u) us\n"),
                                s.uartAvgUs, uartPeakUs, uartMaxUs, s.uartBudgetUs,
                                s.ioAvgUs, ioPeakUs, ioMaxUs, s.ioBudgetUs);
             break;
+        }
         case 13:
+        {
+            uint16_t debugPeakUs;
+            uint16_t debugMaxUs;
+            uint16_t flushPeakUs;
+            uint16_t flushMaxUs;
+            normalizeTimingTriplet(s.debugAvgUs, s.debugPeakUs, s.debugMaxUs, debugPeakUs, debugMaxUs);
+            normalizeTimingTriplet(s.flushAvgUs, s.flushPeakUs, s.flushMaxUs, flushPeakUs, flushMaxUs);
             DebugLog::printf_P(PSTR("debug %u/%u/%u us | flush %u/%u/%u us\n"),
                                s.debugAvgUs, debugPeakUs, debugMaxUs,
                                s.flushAvgUs, flushPeakUs, flushMaxUs);
             break;
+        }
         case 14:
+        {
+            uint16_t imuPeakUs;
+            uint16_t imuMaxUs;
+            uint16_t ultrasonicPeakUs;
+            uint16_t ultrasonicMaxUs;
+            normalizeTimingTriplet(s.imuAvgUs, s.imuPeakUs, s.imuMaxUs, imuPeakUs, imuMaxUs);
+            normalizeTimingTriplet(s.ultrasonicAvgUs, s.ultrasonicPeakUs, s.ultrasonicMaxUs, ultrasonicPeakUs, ultrasonicMaxUs);
             DebugLog::printf_P(PSTR("imu %u/%u/%u (%u) us | ultra %u/%u/%u (%u) us\n"),
                                s.imuAvgUs, imuPeakUs, imuMaxUs, s.sensorBudgetUs,
                                s.ultrasonicAvgUs, ultrasonicPeakUs, ultrasonicMaxUs, s.sensorBudgetUs);
             break;
+        }
         case 15:
             DebugLog::printf_P(PSTR("\n[SENSORS]\n"));
             break;
         case 16:
+        {
+            char imuSummary[88];
+            snprintf_P(imuSummary,
+                       sizeof(imuSummary),
+                       PSTR("avail=%s | mag=%s | temp=%d.%uC | az=%dmg | gz=%d.%udps"),
+                       s.imuAvailable ? "1" : "0",
+                       s.imuMagCalibrated ? "9DOF" : "6DOF",
+                       (int)(s.imuTempDeciC / 10),
+                       (unsigned)abs(s.imuTempDeciC % 10),
+                       (int)s.imuRawAccZ,
+                       (int)(s.imuRawGyrZ / 10),
+                       (unsigned)abs(s.imuRawGyrZ % 10));
             DebugLog::printf_P(PSTR("IMU: %s\n"), imuSummary);
             break;
+        }
         case 17:
+        {
+            char ultrasonicSummary[112];
+            formatRangeSummary(s.ultrasonicConfiguredCount,
+                               s.ultrasonicFoundCount,
+                               s.ultrasonicFound,
+                               s.ultrasonicDistMm,
+                               SENSOR_MAX_ULTRASONICS,
+                               ultrasonicSummary,
+                               sizeof(ultrasonicSummary));
             DebugLog::printf_P(PSTR("Ultrasonic: %s\n"), ultrasonicSummary);
             break;
+        }
         case 18:
             DebugLog::printf_P(PSTR("\n[UART]\n"));
             break;

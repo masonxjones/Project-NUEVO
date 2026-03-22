@@ -11,8 +11,10 @@
  * This driver does NOT use the DMP. Sensor fusion is handled externally
  * by FusionWrapper (Madgwick AHRS from the Fusion library).
  *
- * Magnetometer calibration offsets can be set via setMagOffset() and are
- * subtracted from each magnetometer reading before output.
+ * Magnetometer calibration consists of a hard-iron offset plus an optional
+ * soft-iron 3x3 matrix. The magnetometer is remapped into the accel/gyro
+ * frame first because the AK09916 die inside the ICM-20948 does not share the
+ * same package orientation.
  *
  * Usage:
  *   IMUDriver imu;
@@ -125,19 +127,28 @@ public:
     // ========================================================================
 
     /**
-     * @brief Set hard-iron calibration offsets for the magnetometer
+     * @brief Set full magnetometer calibration
      *
-     * These offsets are subtracted from each magnetometer reading:
-     *   corrected = raw - offset
-     * Offset is typically (max + min) / 2 from a spinning calibration.
+     * The corrected magnetometer vector is:
+     *   corrected = softIronMatrix * (raw - offset)
      *
      * @param ox, oy, oz Offsets in µT
+     * @param matrix Row-major 3x3 soft-iron correction matrix
      */
-    void setMagOffset(float ox, float oy, float oz);
+    void setMagCalibration(float ox, float oy, float oz, const float matrix[9]);
 
     /**
-     * @brief Get current magnetometer calibration offsets
+     * @brief Clear calibration to raw magnetometer output
      */
+    void clearMagCalibration();
+
+    /**
+     * @brief Get current magnetometer calibration
+     */
+    void getMagCalibration(float& ox, float& oy, float& oz, float matrix[9]) const;
+
+    // Compatibility helpers for hard-iron-only callers.
+    void setMagOffset(float ox, float oy, float oz);
     void getMagOffset(float& ox, float& oy, float& oz) const;
 
 private:
@@ -153,8 +164,9 @@ private:
     float magX_, magY_, magZ_;  // µT (offset applied)
     float temp_;                // °C
 
-    // Hard-iron calibration offsets (default 0.0)
+    // Magnetometer calibration
     float magOffX_, magOffY_, magOffZ_;
+    float magMatrix_[9];
 };
 
 #endif // IMUDRIVER_H

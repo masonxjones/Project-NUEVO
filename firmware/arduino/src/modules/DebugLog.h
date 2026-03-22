@@ -39,6 +39,7 @@ private:
     static void pushBuffer(const char *text);
 
     static char buffer_[DEBUG_LOG_BUFFER_SIZE];
+    static char printfBuffer_[256];
     static uint16_t head_;
     static uint16_t tail_;
     static uint16_t droppedBytes_;

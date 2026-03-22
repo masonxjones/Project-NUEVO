@@ -19,7 +19,10 @@
 // FIRMWARE VERSION
 // ============================================================================
 
-#define FIRMWARE_VERSION        0x00090000  // Version 0.9.0
+#define FIRMWARE_VERSION        0x00090500  // Version 0.9.5
+#define TLV_PROTOCOL_VERSION_MAJOR 4
+#define TLV_PROTOCOL_VERSION_MINOR 0
+#define BOARD_REVISION          0       // 0 = unspecified / unknown
 
 // ============================================================================
 // QUICK TUNE SETTINGS
@@ -33,25 +36,34 @@
 #define RPI_BAUD_RATE           250000  // Stable bring-up rate for Mega2560 <-> RPi
 #define HEARTBEAT_TIMEOUT_MS    500     // Disable actuators if heartbeat stops
 
-// Shared I2C bus (IMU / ultrasonic / PCA9685 servo controller)
-// Keep this conservative on the Mega because several devices share the same
-// bus and setup/runtime robustness matters more than peak throughput.
+// Shared I2C bus used by the sensor stack.
+// Keep the runtime bus conservative at 100 kHz for stable coexistence between
+// the ICM-20948, Qwiic ultrasonic, and PCA9685 on the Mega.
+#define I2C_INIT_CLOCK_HZ       100000
 #define I2C_BUS_CLOCK_HZ        100000
+#define SERVO_I2C_CLOCK_HZ      100000
+#define ULTRASONIC_I2C_CLOCK_HZ 100000
 #define I2C_WIRE_TIMEOUT_US     5000
 
 // Soft task cadences
 #define UART_COMMS_FREQ_HZ      50      // UART service task
 #define MOTOR_UPDATE_FREQ_HZ    200     // DC control compute round
 #define SENSOR_UPDATE_FREQ_HZ   100     // Sensor dispatch task
+#define IMU_UPDATE_FREQ_HZ      50      // IMU read + Fusion update cadence
 #define USER_IO_FREQ_HZ         20      // LEDs / buttons / UI indications
 
 // Human-readable status output on USB serial
-#define STATUS_REPORTER_ENABLED 1       // 1 = emit [SYSTEM]/[TIMING]/[UART], 0 = disable
+#define STATUS_REPORTER_ENABLED 0       // 1 = emit [SYSTEM]/[TIMING]/[UART], 0 = disable
 #define STATUS_REPORT_HZ        1       // Report frequency when enabled
+// Lightweight fault-event logging on USB serial. Unlike StatusReporter, this
+// only emits short one-line messages when new loop/UART/control faults appear.
+#define FAULT_EVENT_LOG_ENABLED 1
+#define FAULT_EVENT_MIN_INTERVAL_MS 100
 
 // Debug serial
-#define DEBUG_BAUD_RATE         115200
-#define DEBUG_LOG_BUFFER_SIZE   1024
+#define DEBUG_BAUD_RATE         250000
+#define DEBUG_LOG_BUFFER_SIZE   768
+#define DEBUG_FLUSH_MAX_BYTES_PER_PASS 16
 
 // ============================================================================
 // HARDWARE CONFIGURATION
@@ -127,6 +139,8 @@
 #define ENCODER_STALL_DETECTION     0    // 1=enabled, 0=disabled
 #define ENCODER_FAIL_PWM_THRESHOLD  51   // ~20% of 255; below this = intentional slow/stop
 #define ENCODER_FAIL_TIMEOUT_MS     500  // ms without encoder movement before fault declared
+#define DC_CURRENT_SENSE_ENABLED    0    // 1=sample CT analog pins in DCMotor::service()
+#define MOTOR_TASK_CATCHUP_BUDGET_US 1000 // max wall-clock catch-up budget per taskMotors() pass
 
 // UART task wall-clock budget (used only for oscilloscope debug pin A9 reference)
 // taskUART() runs at 50 Hz; the 20 ms budget is the full tick period.
@@ -163,19 +177,22 @@ class Print;
 extern HardwareSerial &DEBUG_SERIAL_PORT;
 extern Print &DEBUG_SERIAL;
 
-// TLV telemetry streaming periods to the Raspberry Pi.
-// Effective ceiling: periodic telemetry is sent from taskUART(), so with the
+// TLV runtime stream periods to the Raspberry Pi.
+// These are live wire-message periods, not USB debug print intervals.
+// Effective ceiling: periodic TLVs are emitted from taskUART(), so with the
 // default UART_COMMS_FREQ_HZ = 50 the fastest practical interval is 20 ms.
-#define TELEMETRY_DC_STATUS_MS       20
-#define TELEMETRY_STEP_STATUS_MS     200
-#define TELEMETRY_SERVO_STATUS_MS    200
-#define TELEMETRY_IMU_MS             20
-#define TELEMETRY_KINEMATICS_MS      20
-#define TELEMETRY_IO_STATUS_MS       20
-#define TELEMETRY_ULTRASONIC_MS      20
-#define TELEMETRY_VOLTAGE_MS         1000
-#define TELEMETRY_SYS_STATUS_RUN_MS  1000
-#define TELEMETRY_SYS_STATUS_IDLE_MS 1000
+#define TELEMETRY_SYS_STATE_RUN_MS        100
+#define TELEMETRY_SYS_STATE_IDLE_MS       1000
+#define TELEMETRY_SYS_POWER_RUN_MS        100
+#define TELEMETRY_SYS_POWER_IDLE_MS       1000
+#define TELEMETRY_DC_STATE_MS             20
+#define TELEMETRY_STEP_STATE_MS           20
+#define TELEMETRY_SERVO_STATE_MS          100
+#define TELEMETRY_IMU_MS                  20
+#define TELEMETRY_KINEMATICS_MS           20
+#define TELEMETRY_IO_INPUT_STATE_MS       20
+#define TELEMETRY_IO_OUTPUT_STATE_MS      100
+#define TELEMETRY_ULTRASONIC_ALL_MS       20
 
 // Device identification
 #define DEVICE_ID               0x01    // Arduino device ID for TLV protocol
@@ -213,17 +230,30 @@ extern Print &DEBUG_SERIAL;
 // ============================================================================
 
 // IMU (ICM-20948 via SparkFun library + Fusion AHRS)
-#define IMU_ENABLED             1
+#define IMU_ENABLED             0
 // AD0_VAL: 0 = I2C addr 0x68 (AD0 pin LOW), 1 = I2C addr 0x69 (AD0 pin HIGH)
 #define IMU_AD0_VAL             1       // SparkFun breakout default: AD0 high = 0x69
+// Explicit IMU full-scale settings. Keep these aligned with FusionWrapper and
+// the raw sensor conversion factors in IMUDriver.
+#define IMU_ACCEL_RANGE_G       2       // 2, 4, 8, or 16 g
+#define IMU_GYRO_RANGE_DPS      250     // 250, 500, 1000, or 2000 dps
 
 // Fusion AHRS settings (Madgwick-based sensor fusion)
-// gain: 0.5 default. Higher = faster convergence, more susceptible to disturbance.
-#define FUSION_GAIN             0.5f
-// Rejection thresholds: measurements outside these bounds are rejected during init
-#define FUSION_ACCEL_REJECTION  10.0f   // g (acceleration rejection threshold)
-#define FUSION_MAG_REJECTION    10.0f   // µT (magnetic rejection threshold)
-// Recovery trigger period: seconds before algorithm exits recovery mode
+// gain: higher = faster convergence, but more sensitivity to noise/disturbance.
+// For a general rover, start around 0.2-0.3 and only increase if attitude
+// response feels too sluggish.
+#define FUSION_GAIN             0.2f
+// Gyroscope angular-rate recovery threshold in DPS used by the Fusion library.
+// This is NOT the IMU scale factor. Set to 0 to disable the automatic AHRS
+// reset when a high rotation rate is observed. That is the safer default for
+// a rover because hand-testing or sharp yaw motions can easily exceed a strict
+// 250 dps threshold and pin yaw back to zero during recovery.
+#define FUSION_GYRO_RECOVERY_DPS 0.0f
+// Rejection thresholds are angular error limits in DEGREES inside the Fusion
+// library, not sensor units. Lower = reject bad accel/mag data more aggressively.
+#define FUSION_ACCEL_REJECTION  10.0f   // degrees of gravity disagreement
+#define FUSION_MAG_REJECTION    20.0f   // degrees of magnetic disagreement
+// Recovery trigger period in seconds before the algorithm exits recovery mode
 #define FUSION_RECOVERY_PERIOD  5       // seconds
 
 // Lidar (Garmin LIDAR-Lite v4)

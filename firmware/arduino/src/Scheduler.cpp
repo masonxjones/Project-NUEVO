@@ -180,20 +180,21 @@ void Scheduler::tickPeriodic() {
 }
 
 bool Scheduler::serviceFastLane() {
-    bool madeProgress = false;
-
     for (uint8_t priority = 0; priority <= 7; priority++) {
         for (uint8_t i = 0; i < MAX_FAST_TASKS; i++) {
             if (!fastTasks[i].enabled || fastTasks[i].priority != priority) {
                 continue;
             }
             if (fastTasks[i].callback != nullptr && fastTasks[i].callback()) {
-                madeProgress = true;
+                // Stop after the highest-priority fast task that actually made
+                // progress so lower-priority debug/status work cannot run in
+                // the same loop pass as control-critical work.
+                return true;
             }
         }
     }
 
-    return madeProgress;
+    return false;
 }
 
 // ============================================================================

@@ -11,17 +11,14 @@
  * modules that need persistent data should use this API instead of calling
  * EEPROM.put() / EEPROM.get() directly.
  *
- * EEPROM Layout (v1 — 32 bytes total, starting at address 0):
+ * EEPROM Layout (v3 — 56 bytes total, starting at address 0):
  * ─────────────────────────────────────────────────────────────
  *  Byte  0– 3  magic        uint32_t   0xDEAD2026 when layout is valid
- *  Byte  4     version      uint8_t    Layout version (currently 1)
- *  Byte  5– 7  reserved     uint8_t×3  Set to 0
- *  Byte  8–15  (reserved)              Unused (formerly wheel geometry)
- *  Byte 16     magCalValid  uint8_t    1 = valid mag calibration stored
- *  Byte 17–19  reserved     uint8_t×3  Set to 0
- *  Byte 20–23  magOffsetX   float      Mag hard-iron offset X (µT)
- *  Byte 24–27  magOffsetY   float      Mag hard-iron offset Y (µT)
- *  Byte 28–31  magOffsetZ   float      Mag hard-iron offset Z (µT)
+ *  Byte  4     version      uint8_t    Layout version (currently 2)
+ *  Byte  5     magCalValid  uint8_t    1 = valid mag calibration stored
+ *  Byte  6– 7  reserved     uint8_t×2  Set to 0
+ *  Byte  8–19  magOffset    float×3    Hard-iron offset XYZ (µT)
+ *  Byte 20–55  magMatrix    float×9    Row-major 3x3 soft-iron correction matrix
  * ─────────────────────────────────────────────────────────────
  *
  * Wheel geometry is no longer stored in EEPROM. Edit WHEEL_DIAMETER_MM and
@@ -48,21 +45,20 @@
 // ============================================================================
 
 #define PS_MAGIC            0xDEAD2026UL
-#define PS_VERSION          1
+#define PS_VERSION          3
 #define PS_BASE_ADDR        0
 
 // Field offsets from PS_BASE_ADDR
 #define PS_OFF_MAGIC        0   // uint32_t
 #define PS_OFF_VERSION      4   // uint8_t
-// 3 bytes reserved at 5–7
-// 8 bytes reserved at 8–15 (formerly wheel geometry — now defined in RobotKinematics.h)
-#define PS_OFF_MAG_VALID    16  // uint8_t
-// 3 bytes reserved at 17–19
-#define PS_OFF_MAG_X        20  // float
-#define PS_OFF_MAG_Y        24  // float
-#define PS_OFF_MAG_Z        28  // float
+#define PS_OFF_MAG_VALID    5   // uint8_t
+// 2 bytes reserved at 6–7
+#define PS_OFF_MAG_X        8   // float
+#define PS_OFF_MAG_Y        12  // float
+#define PS_OFF_MAG_Z        16  // float
+#define PS_OFF_MAG_MATRIX   20  // float[9]
 
-#define PS_LAYOUT_SIZE      32  // total bytes used
+#define PS_LAYOUT_SIZE      56  // total bytes used
 
 // ============================================================================
 // PERSISTENT STORAGE CLASS (Static)
@@ -104,17 +100,19 @@ public:
     // ========================================================================
 
     /**
-     * @brief Load mag calibration offsets from EEPROM
+     * @brief Load full mag calibration from EEPROM
      * @param ox, oy, oz Output — hard-iron offsets in µT
+     * @param matrix Output — row-major 3x3 soft-iron correction matrix
      * @return False if no calibration has been saved
      */
-    static bool getMagCalibration(float& ox, float& oy, float& oz);
+    static bool getMagCalibration(float& ox, float& oy, float& oz, float matrix[9]);
 
     /**
-     * @brief Persist mag calibration offsets to EEPROM
+     * @brief Persist full mag calibration to EEPROM
      * @param ox, oy, oz Hard-iron offsets in µT
+     * @param matrix Row-major 3x3 soft-iron correction matrix
      */
-    static void setMagCalibration(float ox, float oy, float oz);
+    static void setMagCalibration(float ox, float oy, float oz, const float matrix[9]);
 
     /**
      * @brief Clear saved mag calibration (marks it invalid without erasing bytes)

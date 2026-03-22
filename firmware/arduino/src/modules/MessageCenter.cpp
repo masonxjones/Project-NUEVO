@@ -16,10 +16,12 @@
 #include "MessageCenter.h"
 #include "DebugLog.h"
 #include "LoopMonitor.h"
+#include "MotorControlCoordinator.h"
 #include "RobotKinematics.h"
 #include "SensorManager.h"
 #include "UserIO.h"
 #include "../SystemManager.h"
+#include "../pins.h"
 #include "../drivers/DCMotor.h"
 #include "../drivers/StepperMotor.h"
 #include "../drivers/ServoController.h"
@@ -89,20 +91,27 @@ uint16_t MessageCenter::rxHeartbeatsWindow_ = 0;
 uint16_t MessageCenter::txBytesWindow_ = 0;
 uint16_t MessageCenter::txFramesWindow_ = 0;
 
-uint32_t MessageCenter::lastDCStatusSendMs_ = 0;
-uint32_t MessageCenter::lastStepStatusSendMs_ = 0;
-uint32_t MessageCenter::lastServoStatusSendMs_ = 0;
+uint32_t MessageCenter::lastDCStateSendMs_ = 0;
+uint32_t MessageCenter::lastStepStateSendMs_ = 0;
+uint32_t MessageCenter::lastServoStateSendMs_ = 0;
 uint32_t MessageCenter::lastIMUSendMs_ = 0;
 uint32_t MessageCenter::lastKinematicsSendMs_ = 0;
-uint32_t MessageCenter::lastVoltageSendMs_ = 0;
-uint32_t MessageCenter::lastIOStatusSendMs_ = 0;
-uint32_t MessageCenter::lastStatusSendMs_ = 0;
+uint32_t MessageCenter::lastSysPowerSendMs_ = 0;
+uint32_t MessageCenter::lastIOInputStateSendMs_ = 0;
+uint32_t MessageCenter::lastIOOutputStateSendMs_ = 0;
+uint32_t MessageCenter::lastSysStateSendMs_ = 0;
 uint32_t MessageCenter::lastMagCalSendMs_ = 0;
-uint32_t MessageCenter::lastUltrasonicSendMs_ = 0;
+uint32_t MessageCenter::lastUltrasonicAllSendMs_ = 0;
 
 bool MessageCenter::pendingMagCal_ = false;
 bool MessageCenter::pendingServoStatus_ = false;
 bool MessageCenter::pendingDCStatus_ = false;
+bool MessageCenter::pendingSysInfoRsp_ = false;
+bool MessageCenter::pendingSysConfigRsp_ = false;
+bool MessageCenter::pendingSysDiagRsp_ = false;
+uint8_t MessageCenter::pendingDCPidRspMask_ = 0;
+uint8_t MessageCenter::pendingStepConfigRspMask_ = 0;
+bool MessageCenter::pendingIOOutputState_ = false;
 bool MessageCenter::servoHardwareDirty_ = false;
 uint16_t MessageCenter::servoPulseDirtyMask_ = 0;
 uint16_t MessageCenter::servoOffDirtyMask_ = 0;
@@ -113,6 +122,11 @@ MessageCenter::DeferredMagCalAction MessageCenter::deferredMagCalAction_ = Messa
 float MessageCenter::deferredMagCalOffsetX_ = 0.0f;
 float MessageCenter::deferredMagCalOffsetY_ = 0.0f;
 float MessageCenter::deferredMagCalOffsetZ_ = 0.0f;
+float MessageCenter::deferredMagCalMatrix_[9] = {
+    1.0f, 0.0f, 0.0f,
+    0.0f, 1.0f, 0.0f,
+    0.0f, 0.0f, 1.0f
+};
 bool MessageCenter::initialized_ = false;
 volatile uint8_t MessageCenter::faultLatchFlags_ = 0;
 
@@ -152,16 +166,17 @@ void MessageCenter::init()
     // Stagger the bring-up telemetry timers so the 25 Hz traffic alternates
     // across adjacent 20 ms UART task slots.
     uint32_t now = millis();
-    lastDCStatusSendMs_    = now;       // first 25 Hz DC frame at now+40 ms
-    lastStepStatusSendMs_  = now - 180; // first 5 Hz stepper frame at now+20 ms
-    lastServoStatusSendMs_ = now - 80;  // first 5 Hz servo frame at now+120 ms
+    lastDCStateSendMs_     = now;
+    lastStepStateSendMs_   = now;
+    lastServoStateSendMs_  = now;
     lastKinematicsSendMs_  = now - 20;  // first 25 Hz kinematics frame at now+20 ms
     lastIMUSendMs_         = now - 20;  // first 25 Hz IMU frame at now+20 ms
-    lastIOStatusSendMs_    = now;       // first 25 Hz I/O frame at now+40 ms
-    lastVoltageSendMs_     = now;
-    lastStatusSendMs_      = now;
+    lastIOInputStateSendMs_ = now;
+    lastIOOutputStateSendMs_ = now;
+    lastSysPowerSendMs_    = now;
+    lastSysStateSendMs_    = now;
     lastMagCalSendMs_      = now;
-    lastUltrasonicSendMs_  = now - 180; // first 5 Hz ultrasonic frame at now+20 ms
+    lastUltrasonicAllSendMs_ = now;
 
     lastHeartbeatMs_ = now;
     lastCmdMs_ = now;
@@ -173,6 +188,12 @@ void MessageCenter::init()
     pendingMagCal_ = false;
     pendingServoStatus_ = false;
     pendingDCStatus_ = false;
+    pendingSysInfoRsp_ = false;
+    pendingSysConfigRsp_ = false;
+    pendingSysDiagRsp_ = false;
+    pendingDCPidRspMask_ = 0;
+    pendingStepConfigRspMask_ = 0;
+    pendingIOOutputState_ = false;
     rxBytesWindow_ = 0;
     rxFramesWindow_ = 0;
     rxTlvsWindow_ = 0;
@@ -284,7 +305,7 @@ void MessageCenter::drainTx()
 // ============================================================================
 
 void MessageCenter::recordLoopTime(uint32_t elapsedUs) {
-    // Exponential moving average (alpha = 1/8) for display in SYS_STATUS.
+    // Exponential moving average (alpha = 1/8) for display in SYS_DIAG_RSP.
     // NOTE: elapsedUs includes ISR preemption time — see header for details.
     uint32_t clamped = (elapsedUs > 0xFFFF) ? 0xFFFF : elapsedUs;
     if (loopTimeAvgUs_ == 0)
@@ -458,7 +479,7 @@ void MessageCenter::processDeferredMagCal()
         break;
     case DEFER_MAG_APPLY:
         SensorManager::applyMagCalibration(
-            deferredMagCalOffsetX_, deferredMagCalOffsetY_, deferredMagCalOffsetZ_);
+            deferredMagCalOffsetX_, deferredMagCalOffsetY_, deferredMagCalOffsetZ_, deferredMagCalMatrix_);
         pendingMagCal_ = true;
         break;
     case DEFER_MAG_CLEAR:
@@ -508,8 +529,7 @@ void MessageCenter::sendTelemetry()
 
     SystemState state = SystemManager::getState();
     bool running = (state == SYS_STATE_RUNNING);
-    bool runningOrError = (state == SYS_STATE_RUNNING ||
-                           state == SYS_STATE_ERROR);
+    bool runningOrError = (state == SYS_STATE_RUNNING || state == SYS_STATE_ERROR);
     bool anyDcEnabled = false;
     for (uint8_t i = 0; i < NUM_DC_MOTORS; i++) {
         if (dcMotors[i].isEnabled()) {
@@ -519,49 +539,78 @@ void MessageCenter::sendTelemetry()
     }
     const bool anyStepperActive = StepperManager::anyEnabled() || StepperManager::anyMoving();
     const bool servoEnabled = ServoController::isEnabled();
-    const uint32_t dcStatusInterval = anyDcEnabled ? TELEMETRY_DC_STATUS_MS : 1000UL;
-    const uint32_t stepStatusInterval = anyStepperActive ? TELEMETRY_STEP_STATUS_MS
-                                                         : (uint32_t)TELEMETRY_STEP_STATUS_MS * 4UL;
-    const uint32_t servoStatusInterval = servoEnabled ? TELEMETRY_SERVO_STATUS_MS
-                                                      : (uint32_t)TELEMETRY_SERVO_STATUS_MS * 4UL;
+    const uint32_t dcStateInterval = anyDcEnabled ? TELEMETRY_DC_STATE_MS : 1000UL;
+    const uint32_t stepStateInterval = anyStepperActive ? TELEMETRY_STEP_STATE_MS
+                                                        : (uint32_t)TELEMETRY_STEP_STATE_MS * 4UL;
+    const uint32_t servoStateInterval = servoEnabled ? TELEMETRY_SERVO_STATE_MS
+                                                     : (uint32_t)TELEMETRY_SERVO_STATE_MS * 4UL;
+    const uint32_t sysStateInterval = runningOrError ? TELEMETRY_SYS_STATE_RUN_MS
+                                                     : TELEMETRY_SYS_STATE_IDLE_MS;
+    const uint32_t sysPowerInterval = runningOrError ? TELEMETRY_SYS_POWER_RUN_MS
+                                                     : TELEMETRY_SYS_POWER_IDLE_MS;
 
     // Open a new frame; all send*() calls below append TLVs to it.
     beginFrame();
 
-    // ---- System status first so the UI keeps receiving link/error state even
-    // when the bring-up TX budget forces lower-priority telemetry to drop. ----
-    uint32_t statusInterval = runningOrError ? TELEMETRY_SYS_STATUS_RUN_MS
-                                             : TELEMETRY_SYS_STATUS_IDLE_MS;
-    if (currentMs - lastStatusSendMs_ >= statusInterval && phase == 7U)
-    {
-        lastStatusSendMs_ = currentMs;
-        sendSystemStatus();
+    // ---- Immediate query responses first ----
+    if (pendingSysInfoRsp_) {
+        pendingSysInfoRsp_ = false;
+        sendSysInfoRsp();
+    }
+    if (pendingSysConfigRsp_) {
+        pendingSysConfigRsp_ = false;
+        sendSysConfigRsp();
+    }
+    if (pendingSysDiagRsp_) {
+        pendingSysDiagRsp_ = false;
+        sendSysDiagRsp();
+    }
+    for (uint8_t bit = 0; bit < 8; ++bit) {
+        if ((pendingDCPidRspMask_ & (uint8_t)(1u << bit)) == 0U) {
+            continue;
+        }
+        pendingDCPidRspMask_ &= (uint8_t)~(1u << bit);
+        sendDCPidRsp((uint8_t)(bit / 2U), (uint8_t)(bit % 2U));
+    }
+    for (uint8_t bit = 0; bit < NUM_STEPPERS; ++bit) {
+        if ((pendingStepConfigRspMask_ & (uint8_t)(1u << bit)) == 0U) {
+            continue;
+        }
+        pendingStepConfigRspMask_ &= (uint8_t)~(1u << bit);
+        sendStepConfigRsp(bit);
     }
 
-    // ---- Power telemetry early so UI battery / servo rails do not get
-    // squeezed out by lower-priority RUNNING telemetry in the same frame. ----
-    if (currentMs - lastVoltageSendMs_ >= TELEMETRY_VOLTAGE_MS && phase == 9U)
+    // ---- Core system streams first so link / fault state wins under TX pressure ----
+    if (state != SYS_STATE_INIT &&
+        currentMs - lastSysStateSendMs_ >= sysStateInterval && phase == 7U)
     {
-        lastVoltageSendMs_ = currentMs;
-        sendVoltageData();
+        lastSysStateSendMs_ = currentMs;
+        sendSysState();
     }
 
-    // ---- Bring-up telemetry profile (RUNNING only) ----
+    if (state != SYS_STATE_INIT &&
+        currentMs - lastSysPowerSendMs_ >= sysPowerInterval && phase == 9U)
+    {
+        lastSysPowerSendMs_ = currentMs;
+        sendSysPower();
+    }
+
+    // ---- Runtime streams (RUNNING only) ----
     if (running)
     {
         if (pendingDCStatus_ ||
-            (currentMs - lastDCStatusSendMs_ >= dcStatusInterval && phase == 0U))
+            (currentMs - lastDCStateSendMs_ >= dcStateInterval && phase == 0U))
         {
-            lastDCStatusSendMs_ = currentMs;
+            lastDCStateSendMs_ = currentMs;
             pendingDCStatus_ = false;
-            sendDCStatusAll();
+            sendDCStateAll();
         }
 
-        if (currentMs - lastStepStatusSendMs_ >= stepStatusInterval &&
+        if (currentMs - lastStepStateSendMs_ >= stepStateInterval &&
             phase == 8U)
         {
-            lastStepStatusSendMs_ = currentMs;
-            sendStepStatusAll();
+            lastStepStateSendMs_ = currentMs;
+            sendStepStateAll();
         }
 
         if (anyDcEnabled &&
@@ -572,10 +621,10 @@ void MessageCenter::sendTelemetry()
             sendSensorKinematics();
         }
 
-        if (currentMs - lastIOStatusSendMs_ >= TELEMETRY_IO_STATUS_MS && phase == 4U)
+        if (currentMs - lastIOInputStateSendMs_ >= TELEMETRY_IO_INPUT_STATE_MS && phase == 4U)
         {
-            lastIOStatusSendMs_ = currentMs;
-            sendIOStatus();
+            lastIOInputStateSendMs_ = currentMs;
+            sendIOInputState();
         }
 
         if (SensorManager::isIMUAvailable() &&
@@ -588,32 +637,55 @@ void MessageCenter::sendTelemetry()
 
     }
 
-    // Servo status is needed in IDLE as well because the UI can enable and
-    // position servos outside RUNNING. Also push an immediate status refresh
-    // after servo commands so optimistic UI state is confirmed quickly.
-    if (state != SYS_STATE_INIT &&
-        (pendingServoStatus_ ||
-         (currentMs - lastServoStatusSendMs_ >= servoStatusInterval &&
-          phase == 5U)))
+    // IMU data is useful in IDLE for bring-up and calibration workflows even
+    // though the main runtime telemetry rates are defined around RUNNING.
+    if (!running &&
+        state != SYS_STATE_INIT &&
+        SensorManager::isIMUAvailable() &&
+        currentMs - lastIMUSendMs_ >= 100 &&
+        phase == 6U)
     {
-        lastServoStatusSendMs_ = currentMs;
-        pendingServoStatus_ = false;
-        sendServoStatusAll();
+        lastIMUSendMs_ = currentMs;
+        sendSensorIMU();
     }
 
-    // Ultrasonic range is intended as a responsive live sensor feed, so do not
-    // phase-gate it down to one 200 ms slot. Publish at the configured
-    // interval whenever the UART task runs.
+    // Servo status is needed in IDLE as well because the UI can enable and
+    // position servos outside RUNNING. Keep the periodic stream in RUNNING, but
+    // allow immediate state refresh after commands in any non-INIT state.
+    if (state != SYS_STATE_INIT &&
+        (pendingServoStatus_ ||
+         (running &&
+          currentMs - lastServoStateSendMs_ >= servoStateInterval &&
+          phase == 5U)))
+    {
+        lastServoStateSendMs_ = currentMs;
+        pendingServoStatus_ = false;
+        sendServoStateAll();
+    }
+
+    if (state != SYS_STATE_INIT &&
+        (pendingIOOutputState_ ||
+         (currentMs - lastIOOutputStateSendMs_ >= TELEMETRY_IO_OUTPUT_STATE_MS &&
+          phase == 5U)))
+    {
+        lastIOOutputStateSendMs_ = currentMs;
+        pendingIOOutputState_ = false;
+        sendIOOutputState();
+    }
+
     if (state != SYS_STATE_INIT &&
         SensorManager::getUltrasonicConfiguredCount() > 0 &&
-        currentMs - lastUltrasonicSendMs_ >= TELEMETRY_ULTRASONIC_MS)
+        ((running &&
+          currentMs - lastUltrasonicAllSendMs_ >= TELEMETRY_ULTRASONIC_ALL_MS) ||
+         (!running &&
+          currentMs - lastUltrasonicAllSendMs_ >= 100)))
     {
-        lastUltrasonicSendMs_ = currentMs;
-        sendUltrasonicRange();
+        lastUltrasonicAllSendMs_ = currentMs;
+        sendUltrasonicAll();
     }
 
     // ---- Mag cal status at 5 Hz while sampling ----
-    if (SensorManager::getMagCalData().state == MAG_CAL_SAMPLING)
+    if (SensorManager::getMagCalData().state == MAG_CAL_STATE_SAMPLING)
     {
         if (currentMs - lastMagCalSendMs_ >= 200 && phase == 1U)
         {
@@ -753,11 +825,11 @@ void MessageCenter::routeMessage(uint8_t type, const uint8_t *payload, uint8_t l
     SystemState state = SystemManager::getState();
     // Motor commands only accepted in RUNNING state
     bool allowMotorCmds = (state == SYS_STATE_RUNNING);
-    // Config only accepted in IDLE state
+    // Mutable config only accepted in IDLE state
     bool allowConfig = (state == SYS_STATE_IDLE);
-    // SYS_CMD and SYS_HEARTBEAT accepted in any state
-    // SYS_SET_PID accepted in IDLE or RUNNING
+    // Runtime tuning accepted in IDLE or RUNNING
     bool allowPID = (state == SYS_STATE_IDLE || state == SYS_STATE_RUNNING);
+    bool allowQueries = (state != SYS_STATE_INIT);
 
     switch (type)
     {
@@ -775,14 +847,29 @@ void MessageCenter::routeMessage(uint8_t type, const uint8_t *payload, uint8_t l
             handleSysCmd((const PayloadSysCmd *)payload);
         break;
 
-    case SYS_CONFIG:
-        if (allowConfig && length == sizeof(PayloadSysConfig))
-            handleSysConfig((const PayloadSysConfig *)payload);
+    case SYS_INFO_REQ:
+        if (allowQueries && length == sizeof(PayloadSysInfoReq))
+            handleSysInfoReq((const PayloadSysInfoReq *)payload);
         break;
 
-    case SYS_SET_PID:
-        if (allowPID && length == sizeof(PayloadSetPID))
-            handleSetPID((const PayloadSetPID *)payload);
+    case SYS_CONFIG_REQ:
+        if (allowQueries && length == sizeof(PayloadSysConfigReq))
+            handleSysConfigReq((const PayloadSysConfigReq *)payload);
+        break;
+
+    case SYS_CONFIG_SET:
+        if (allowConfig && length == sizeof(PayloadSysConfigSet))
+            handleSysConfigSet((const PayloadSysConfigSet *)payload);
+        break;
+
+    case SYS_DIAG_REQ:
+        if (allowQueries && length == sizeof(PayloadSysDiagReq))
+            handleSysDiagReq((const PayloadSysDiagReq *)payload);
+        break;
+
+    case SYS_ODOM_RESET:
+        if (allowQueries && length == sizeof(PayloadSysOdomReset))
+            handleSysOdomReset((const PayloadSysOdomReset *)payload);
         break;
 
     // ---- DC motor commands (RUNNING only) ----
@@ -812,9 +899,24 @@ void MessageCenter::routeMessage(uint8_t type, const uint8_t *payload, uint8_t l
             handleStepEnable((const PayloadStepEnable *)payload);
         break;
 
-    case STEP_SET_PARAMS:
-        if (allowMotorCmds && length == sizeof(PayloadStepSetParams))
-            handleStepSetParams((const PayloadStepSetParams *)payload);
+    case DC_PID_REQ:
+        if (allowQueries && length == sizeof(PayloadDCPidReq))
+            handleDCPidReq((const PayloadDCPidReq *)payload);
+        break;
+
+    case DC_PID_SET:
+        if (allowPID && length == sizeof(PayloadDCPidSet))
+            handleDCPidSet((const PayloadDCPidSet *)payload);
+        break;
+
+    case STEP_CONFIG_REQ:
+        if (allowQueries && length == sizeof(PayloadStepConfigReq))
+            handleStepConfigReq((const PayloadStepConfigReq *)payload);
+        break;
+
+    case STEP_CONFIG_SET:
+        if (allowPID && length == sizeof(PayloadStepConfigSet))
+            handleStepConfigSet((const PayloadStepConfigSet *)payload);
         break;
 
     case STEP_MOVE:
@@ -940,7 +1042,19 @@ void MessageCenter::handleSysCmd(const PayloadSysCmd *payload)
     }
 }
 
-void MessageCenter::handleSysConfig(const PayloadSysConfig *payload)
+void MessageCenter::handleSysInfoReq(const PayloadSysInfoReq *payload)
+{
+    (void)payload;
+    pendingSysInfoRsp_ = true;
+}
+
+void MessageCenter::handleSysConfigReq(const PayloadSysConfigReq *payload)
+{
+    (void)payload;
+    pendingSysConfigRsp_ = true;
+}
+
+void MessageCenter::handleSysConfigSet(const PayloadSysConfigSet *payload)
 {
     // IDLE state only — enforced by routeMessage()
     if (payload->neoPixelCount != 0)
@@ -956,29 +1070,55 @@ void MessageCenter::handleSysConfig(const PayloadSysConfig *payload)
                         (payload->motorDirMask & payload->motorDirChangeMask);
     }
 
-    if (payload->resetOdometry)
-    {
-        RobotKinematics::reset(
-            dcMotors[ODOM_LEFT_MOTOR].getPosition(),
-            dcMotors[ODOM_RIGHT_MOTOR].getPosition());
+    if (payload->configuredSensorMask != 0xFFU) {
+        // Configured sensor mask is currently compile-time informational only.
+        // Preserve the field for the bridge/bootstrap contract, but do not try
+        // to hot-reconfigure drivers on the Mega.
     }
+
+    pendingSysConfigRsp_ = true;
+    pendingSysInfoRsp_ = true;
 }
 
-void MessageCenter::handleSetPID(const PayloadSetPID *payload)
+void MessageCenter::handleSysDiagReq(const PayloadSysDiagReq *payload)
+{
+    (void)payload;
+    pendingSysDiagRsp_ = true;
+}
+
+void MessageCenter::handleSysOdomReset(const PayloadSysOdomReset *payload)
+{
+    (void)payload;
+    RobotKinematics::reset(
+        dcMotors[ODOM_LEFT_MOTOR].getPosition(),
+        dcMotors[ODOM_RIGHT_MOTOR].getPosition());
+}
+
+void MessageCenter::handleDCPidReq(const PayloadDCPidReq *payload)
+{
+    if (payload->motorId >= NUM_DC_MOTORS || payload->loopType > DC_PID_LOOP_VELOCITY) {
+        return;
+    }
+    pendingDCPidRspMask_ |= (uint8_t)(1u << (payload->motorId * 2u + payload->loopType));
+}
+
+void MessageCenter::handleDCPidSet(const PayloadDCPidSet *payload)
 {
     if (payload->motorId >= NUM_DC_MOTORS)
         return;
 
     DCMotor &motor = dcMotors[payload->motorId];
 
-    if (payload->loopType == 0)
+    if (payload->loopType == DC_PID_LOOP_POSITION)
     {
         motor.setPositionPID(payload->kp, payload->ki, payload->kd);
     }
-    else if (payload->loopType == 1)
+    else if (payload->loopType == DC_PID_LOOP_VELOCITY)
     {
         motor.setVelocityPID(payload->kp, payload->ki, payload->kd);
     }
+
+    pendingDCPidRspMask_ |= (uint8_t)(1u << (payload->motorId * 2u + payload->loopType));
 }
 
 // ============================================================================
@@ -1075,7 +1215,15 @@ void MessageCenter::handleStepEnable(const PayloadStepEnable *payload)
     }
 }
 
-void MessageCenter::handleStepSetParams(const PayloadStepSetParams *payload)
+void MessageCenter::handleStepConfigReq(const PayloadStepConfigReq *payload)
+{
+    if (payload->stepperId >= NUM_STEPPERS) {
+        return;
+    }
+    pendingStepConfigRspMask_ |= (uint8_t)(1u << payload->stepperId);
+}
+
+void MessageCenter::handleStepConfigSet(const PayloadStepConfigSet *payload)
 {
     if (payload->stepperId >= NUM_STEPPERS)
         return;
@@ -1085,6 +1233,7 @@ void MessageCenter::handleStepSetParams(const PayloadStepSetParams *payload)
 
     s->setMaxVelocity((uint16_t)payload->maxVelocity);
     s->setAcceleration((uint16_t)payload->acceleration);
+    pendingStepConfigRspMask_ |= (uint8_t)(1u << payload->stepperId);
 }
 
 void MessageCenter::handleStepMove(const PayloadStepMove *payload)
@@ -1121,7 +1270,9 @@ void MessageCenter::handleStepHome(const PayloadStepHome *payload)
 
 void MessageCenter::handleServoEnable(const PayloadServoEnable *payload)
 {
-    // Enable only permitted in RUNNING with battery power; disable always allowed
+    // Enable only permitted in operator-controlled states. Servo rail presence
+    // affects whether the actuators can physically move, but the controller can
+    // still hold/output pulses in IDLE and RUNNING.
     bool canEnable = SystemManager::canEnableServoActuator();
 
     if (payload->channel == 0xFF)
@@ -1130,7 +1281,7 @@ void MessageCenter::handleServoEnable(const PayloadServoEnable *payload)
         if (payload->enable)
         {
             if (!canEnable) {
-                DEBUG_LOG.println(F("[SERVO] Enable rejected: battery absent or invalid state."));
+                DEBUG_LOG.println(F("[SERVO] Enable rejected: invalid state."));
                 return;
             }
             servoEnabledMask_ = 0xFFFF;
@@ -1151,7 +1302,7 @@ void MessageCenter::handleServoEnable(const PayloadServoEnable *payload)
         if (payload->enable)
         {
             if (!canEnable) {
-                DEBUG_LOG.println(F("[SERVO] Enable rejected: battery absent or invalid state."));
+                DEBUG_LOG.println(F("[SERVO] Enable rejected: invalid state."));
                 return;
             }
             servoEnabledMask_ |= bit;
@@ -1175,7 +1326,7 @@ void MessageCenter::handleServoSet(const PayloadServoSetSingle *payload)
         return;
 
     uint16_t bit = (uint16_t)(1u << payload->channel);
-    servoPendingPulseUs_[payload->channel] = payload->pulseUs;
+    servoPendingPulseUs_[payload->channel] = payload->pulseUs[0];
     servoPulseDirtyMask_ |= bit;
     pendingServoStatus_ = true;
 }
@@ -1212,6 +1363,7 @@ void MessageCenter::handleSetLED(const PayloadSetLED *payload)
                    (LEDMode)payload->mode,
                    payload->brightness,
                    payload->periodMs);
+    pendingIOOutputState_ = true;
 }
 
 void MessageCenter::handleSetNeoPixel(const PayloadSetNeoPixel *payload)
@@ -1225,6 +1377,7 @@ void MessageCenter::handleSetNeoPixel(const PayloadSetNeoPixel *payload)
     {
         UserIO::setNeoPixelColor(payload->red, payload->green, payload->blue);
     }
+    pendingIOOutputState_ = true;
 }
 
 // ============================================================================
@@ -1252,6 +1405,7 @@ void MessageCenter::handleMagCalCmd(const PayloadMagCalCmd *payload)
         deferredMagCalOffsetX_ = payload->offsetX;
         deferredMagCalOffsetY_ = payload->offsetY;
         deferredMagCalOffsetZ_ = payload->offsetZ;
+        memcpy(deferredMagCalMatrix_, payload->softIronMatrix, sizeof(deferredMagCalMatrix_));
         deferredMagCalAction_ = DEFER_MAG_APPLY;
         break;
 
@@ -1270,13 +1424,13 @@ void MessageCenter::handleMagCalCmd(const PayloadMagCalCmd *payload)
 // Each function appends one TLV to the current frame via addTlvPacket().
 // Must be called after beginFrame() and before sendFrame().
 
-void MessageCenter::sendDCStatusAll()
+void MessageCenter::sendDCStateAll()
 {
-    PayloadDCStatusAll payload;
+    PayloadDCStateAll payload;
 
     for (uint8_t i = 0; i < 4; i++)
     {
-        DCMotorStatus &s = payload.motors[i];
+        DCMotorState &s = payload.motors[i];
         s.mode = (uint8_t)dcMotors[i].getMode();
         s.faultFlags = dcMotors[i].isEncoderFailed() ? 0x02 : 0;
         s.position = dcMotors[i].getPosition();
@@ -1285,43 +1439,37 @@ void MessageCenter::sendDCStatusAll()
         s.targetVel = (int32_t)dcMotors[i].getTargetVelocity();
         s.pwmOutput = dcMotors[i].getPWMOutput();
         s.currentMa = dcMotors[i].getCurrent();
-        s.posKp = dcMotors[i].getPosKp();
-        s.posKi = dcMotors[i].getPosKi();
-        s.posKd = dcMotors[i].getPosKd();
-        s.velKp = dcMotors[i].getVelKp();
-        s.velKi = dcMotors[i].getVelKi();
-        s.velKd = dcMotors[i].getVelKd();
     }
+    payload.timestamp = millis();
 
-    appendTelemetryTlv(DC_STATUS_ALL, sizeof(payload), &payload);
+    appendTelemetryTlv(DC_STATE_ALL, sizeof(payload), &payload);
 }
 
-void MessageCenter::sendStepStatusAll()
+void MessageCenter::sendStepStateAll()
 {
-    PayloadStepStatusAll payload;
+    PayloadStepStateAll payload;
 
     for (uint8_t i = 0; i < 4; i++)
     {
-        StepperStatus &s = payload.steppers[i];
+        StepperChannelState &s = payload.steppers[i];
         const StepperMotor *sm = StepperManager::getStepper(i);
         if (!sm) continue;
         s.enabled = sm->isEnabled() ? 1 : 0;
         s.motionState = (uint8_t)sm->getState();
-        s.limitHit = 0;
+        s.limitFlags = sm->isHomeLimitTriggered() ? 0x01 : 0x00;
         s.reserved = 0;
-        s.commandedCount = sm->getPosition();
+        s.count = sm->getPosition();
         s.targetCount = sm->getTargetPosition();
-        s.currentSpeed = sm->getCurrentSpeed();
-        s.maxSpeed = sm->getMaxVelocity();
-        s.acceleration = sm->getAcceleration();
+        s.currentSpeed = (int32_t)sm->getCurrentSpeed();
     }
+    payload.timestamp = millis();
 
-    appendTelemetryTlv(STEP_STATUS_ALL, sizeof(payload), &payload);
+    appendTelemetryTlv(STEP_STATE_ALL, sizeof(payload), &payload);
 }
 
-void MessageCenter::sendServoStatusAll()
+void MessageCenter::sendServoStateAll()
 {
-    PayloadServoStatusAll payload;
+    PayloadServoStateAll payload;
 
     payload.pca9685Connected = ServoController::isInitialized() ? 1 : 0;
     payload.pca9685Error = ServoController::getLastI2CError();
@@ -1338,8 +1486,9 @@ void MessageCenter::sendServoStatusAll()
             payload.pulseUs[i] = 0;
         }
     }
+    payload.timestamp = millis();
 
-    appendTelemetryTlv(SERVO_STATUS_ALL, sizeof(payload), &payload);
+    appendTelemetryTlv(SERVO_STATE_ALL, sizeof(payload), &payload);
 }
 
 void MessageCenter::sendSensorIMU()
@@ -1371,30 +1520,29 @@ void MessageCenter::sendSensorIMU()
     appendTelemetryTlv(SENSOR_IMU, sizeof(payload), &payload);
 }
 
-void MessageCenter::sendUltrasonicRange()
+void MessageCenter::sendUltrasonicAll()
 {
-    // Ultrasonic sensors (50 Hz path)
-    for (uint8_t i = 0; i < SensorManager::getUltrasonicConfiguredCount(); i++)
-    {
-        PayloadSensorRange p;
-        p.sensorId = i;
-        p.sensorType = 0; // ultrasonic
-        p.reserved = 0;
-        p.reserved2 = 0;
-        p.timestamp = micros();
-        if (SensorManager::isUltrasonicFound(i))
-        {
-            p.status = 0; // valid
-            p.distanceMm = SensorManager::getUltrasonicDistanceMm(i);
+    PayloadSensorUltrasonicAll payload;
+    memset(&payload, 0, sizeof(payload));
+
+    payload.configuredCount = SensorManager::getUltrasonicConfiguredCount();
+    for (uint8_t i = 0; i < TLV_MAX_ULTRASONICS; ++i) {
+        if (i >= payload.configuredCount) {
+            payload.sensors[i].status = ULTRA_STATUS_NOT_INSTALLED;
+            payload.sensors[i].distanceMm = 0;
+            continue;
         }
-        else
-        {
-            p.status = 3; // not installed
-            p.distanceMm = 0;
+        if (SensorManager::isUltrasonicFound(i)) {
+            payload.sensors[i].status = ULTRA_STATUS_VALID;
+            payload.sensors[i].distanceMm = SensorManager::getUltrasonicDistanceMm(i);
+        } else {
+            payload.sensors[i].status = ULTRA_STATUS_NOT_INSTALLED;
+            payload.sensors[i].distanceMm = 0;
         }
-        if (!appendTelemetryTlv(SENSOR_RANGE, sizeof(p), &p))
-            break;
     }
+    payload.timestamp = millis();
+
+    appendTelemetryTlv(SENSOR_ULTRASONIC_ALL, sizeof(payload), &payload);
 }
 
 void MessageCenter::sendSensorKinematics()
@@ -1417,98 +1565,279 @@ void MessageCenter::sendSensorKinematics()
     appendTelemetryTlv(SENSOR_KINEMATICS, sizeof(payload), &payload);
 }
 
-void MessageCenter::sendVoltageData()
+void MessageCenter::sendSysPower()
 {
-    PayloadSensorVoltage payload;
+    PayloadSysPower payload;
 
     payload.batteryMv = (uint16_t)(SensorManager::getBatteryVoltage() * 1000.0f);
     payload.rail5vMv = (uint16_t)(SensorManager::get5VRailVoltage() * 1000.0f);
     payload.servoRailMv = (uint16_t)(SensorManager::getServoVoltage() * 1000.0f);
     payload.reserved = 0;
+    payload.timestamp = millis();
 
-    appendTelemetryTlv(SENSOR_VOLTAGE, sizeof(payload), &payload);
+    appendTelemetryTlv(SYS_POWER, sizeof(payload), &payload);
 }
 
-void MessageCenter::sendIOStatus()
+void MessageCenter::sendIOInputState()
 {
-    // Variable-length payload: 12 bytes fixed + 3 bytes per NeoPixel
-    uint8_t buf[12 + 3 * NEOPIXEL_COUNT];
+    PayloadIOInputState payload;
+    payload.buttonMask = UserIO::getButtonStates();
+    payload.limitMask = UserIO::getLimitStates();
+    payload.timestamp = millis();
+
+    appendTelemetryTlv(IO_INPUT_STATE, sizeof(payload), &payload);
+}
+
+void MessageCenter::sendIOOutputState()
+{
+    uint8_t buf[sizeof(PayloadIOOutputState) + 3 * NEOPIXEL_COUNT];
     memset(buf, 0, sizeof(buf));
 
-    PayloadIOStatus *p = (PayloadIOStatus *)buf;
-    p->buttonMask = UserIO::getButtonStates();
-    for (uint8_t i = 0; i < 5; i++) {
-        p->ledBrightness[i] = UserIO::getLEDBrightness(i);
+    PayloadIOOutputState *payload = (PayloadIOOutputState *)buf;
+    for (uint8_t i = 0; i < LED_COUNT; i++) {
+        payload->ledBrightness[i] = UserIO::getLEDBrightness(i);
     }
-    p->reserved = 0;
-    p->timestamp = millis();
-    // NeoPixel RGB bytes appended after fixed struct
+    payload->neoPixelCount = neoPixelCount_;
+    payload->reserved = 0;
+    payload->timestamp = millis();
 
-    uint8_t sendLen = 12 + (uint8_t)(neoPixelCount_ * 3);
-    if (sendLen > sizeof(buf))
+    uint8_t *neoBytes = buf + sizeof(PayloadIOOutputState);
+    const uint8_t exportedCount = (neoPixelCount_ > NEOPIXEL_COUNT) ? NEOPIXEL_COUNT : neoPixelCount_;
+    for (uint8_t i = 0; i < exportedCount; ++i) {
+        uint32_t color = UserIO::getNeoPixelColor(i);
+        neoBytes[i * 3U + 0U] = (uint8_t)((color >> 16) & 0xFFU);
+        neoBytes[i * 3U + 1U] = (uint8_t)((color >> 8) & 0xFFU);
+        neoBytes[i * 3U + 2U] = (uint8_t)(color & 0xFFU);
+    }
+
+    uint8_t sendLen = (uint8_t)(sizeof(PayloadIOOutputState) + (neoPixelCount_ * 3U));
+    if (sendLen > sizeof(buf)) {
         sendLen = sizeof(buf);
-
-    appendTelemetryTlv(IO_STATUS, sendLen, buf);
+    }
+    appendTelemetryTlv(IO_OUTPUT_STATE, sendLen, buf);
 }
 
-void MessageCenter::sendSystemStatus()
+void MessageCenter::sendSysState()
 {
-    PayloadSystemStatus payload;
+    static uint32_t prevMissedRoundCount = 0;
+    static uint32_t prevLateComputeCount = 0;
+    static uint32_t prevReusedOutputCount = 0;
+    static uint32_t prevCrossRoundComputeCount = 0;
+
+    PayloadSysState payload;
     memset(&payload, 0, sizeof(payload));
 
-    payload.firmwareMajor = (FIRMWARE_VERSION >> 24) & 0xFF;
-    payload.firmwareMinor = (FIRMWARE_VERSION >> 16) & 0xFF;
-    payload.firmwarePatch = (FIRMWARE_VERSION >> 8) & 0xFF;
     payload.state = (uint8_t)SystemManager::getState();
     payload.uptimeMs = millis();
-    payload.lastRxMs = getTimeSinceHeartbeat();
-    payload.lastCmdMs = millis() - lastCmdMs_;
-    payload.batteryMv = (uint16_t)(SensorManager::getBatteryVoltage() * 1000.0f);
-    payload.rail5vMv = (uint16_t)(SensorManager::get5VRailVoltage() * 1000.0f);
+    const uint32_t lastRxMs = getTimeSinceHeartbeat();
+    const uint32_t lastCmdMs = millis() - lastCmdMs_;
+    payload.lastRxMs = (uint16_t)((lastRxMs > 0xFFFFU) ? 0xFFFFU : lastRxMs);
+    payload.lastCmdMs = (uint16_t)((lastCmdMs > 0xFFFFU) ? 0xFFFFU : lastCmdMs);
 
-    // Error flags — live conditions OR latched fault cause
-    payload.errorFlags = faultLatchFlags_;   // always show what triggered ERROR
-    if (SensorManager::isBatteryLow())
+    payload.warningFlags = WARN_NONE;
+    if (!heartbeatValid_ && SystemManager::getState() == SYS_STATE_RUNNING) {
+        payload.warningFlags |= WARN_LIVENESS_LOST;
+    }
+    if (LoopMonitor::consumeFaultEventMask() != 0U) {
+        payload.warningFlags |= WARN_LOOP_OVERRUN;
+    }
+    if (!SensorManager::isBatteryPresent()) {
+        payload.warningFlags |= WARN_NO_BATTERY;
+    }
+    uint32_t roundCount = 0;
+    uint32_t requestedRound = 0;
+    uint32_t computedRound = 0;
+    uint32_t appliedRound = 0;
+    uint8_t slot = 0;
+    uint8_t computeSeq = 0;
+    uint8_t appliedSeq = 0;
+    uint32_t missedRoundCount = 0;
+    uint32_t lateComputeCount = 0;
+    uint32_t reusedOutputCount = 0;
+    uint32_t crossRoundComputeCount = 0;
+    bool computeBusy = false;
+
+    MotorControlCoordinator::snapshot(roundCount,
+                                      requestedRound,
+                                      computedRound,
+                                      appliedRound,
+                                      slot,
+                                      computeSeq,
+                                      appliedSeq,
+                                      missedRoundCount,
+                                      lateComputeCount,
+                                      reusedOutputCount,
+                                      crossRoundComputeCount,
+                                      computeBusy);
+
+    const bool controlWarning =
+        (missedRoundCount > prevMissedRoundCount) ||
+        (lateComputeCount > prevLateComputeCount) ||
+        (reusedOutputCount > prevReusedOutputCount) ||
+        (crossRoundComputeCount > prevCrossRoundComputeCount);
+
+    prevMissedRoundCount = missedRoundCount;
+    prevLateComputeCount = lateComputeCount;
+    prevReusedOutputCount = reusedOutputCount;
+    prevCrossRoundComputeCount = crossRoundComputeCount;
+
+    if (controlWarning) {
+        payload.warningFlags |= WARN_CONTROL_MISS;
+    }
+
+    payload.errorFlags = faultLatchFlags_;
+    if (SensorManager::isBatteryCritical()) {
         payload.errorFlags |= ERR_UNDERVOLTAGE;
-    if (SensorManager::isBatteryOvervoltage())
+    }
+    if (SensorManager::isBatteryOvervoltage()) {
         payload.errorFlags |= ERR_OVERVOLTAGE;
-    // LIVENESS_LOST: live check only valid in RUNNING; latch covers the ERROR case
-    if (!heartbeatValid_ && SystemManager::getState() == SYS_STATE_RUNNING)
-        payload.errorFlags |= ERR_LIVENESS_LOST;
-    if (ServoController::hasI2CError())
+    }
+    if (ServoController::hasI2CError()) {
         payload.errorFlags |= ERR_I2C_ERROR;
-#if IMU_ENABLED
-    if (!SensorManager::isIMUAvailable())
-        payload.errorFlags |= ERR_IMU_ERROR;
-#endif
-    if (LoopMonitor::getLiveFaultMask() != 0)
-        payload.errorFlags |= ERR_LOOP_OVERRUN;
-    // Per-motor encoder stall: any failed motor sets the shared flag
+    }
     for (uint8_t i = 0; i < NUM_DC_MOTORS; i++) {
         if (dcMotors[i].isEncoderFailed()) {
             payload.errorFlags |= ERR_ENCODER_FAIL;
             break;
         }
     }
-    // Attached sensors bitmask: bit0=IMU, bit1=reserved, bit2=Ultrasonic
-    if (SensorManager::isIMUAvailable())
-        payload.attachedSensors |= 0x01;
-    if (SensorManager::getUltrasonicCount() > 0)
-        payload.attachedSensors |= 0x04;
 
+    payload.runtimeFlags = 0;
+    if (heartbeatValid_) payload.runtimeFlags |= RTFLAG_LINK_OK;
+    if (!ServoController::hasI2CError()) payload.runtimeFlags |= RTFLAG_I2C_OK;
+    if (ServoController::isInitialized()) payload.runtimeFlags |= RTFLAG_SERVO_READY;
+    if (SensorManager::isBatteryPresent()) payload.runtimeFlags |= RTFLAG_BATTERY_PRESENT;
+    if (SensorManager::isIMUAvailable()) payload.runtimeFlags |= RTFLAG_IMU_READY;
+
+    appendTelemetryTlv(SYS_STATE, sizeof(payload), &payload);
+}
+
+void MessageCenter::sendSysInfoRsp()
+{
+    PayloadSysInfoRsp payload;
+    memset(&payload, 0, sizeof(payload));
+
+    payload.firmwareMajor = (FIRMWARE_VERSION >> 24) & 0xFF;
+    payload.firmwareMinor = (FIRMWARE_VERSION >> 16) & 0xFF;
+    payload.firmwarePatch = (FIRMWARE_VERSION >> 8) & 0xFF;
+    payload.protocolMajor = TLV_PROTOCOL_VERSION_MAJOR;
+    payload.protocolMinor = TLV_PROTOCOL_VERSION_MINOR;
+    payload.boardRevision = BOARD_REVISION;
+    payload.featureMask = FEATURE_DC_MOTORS | FEATURE_STEPPERS | FEATURE_SERVOS |
+                          FEATURE_USER_LED | FEATURE_NEOPIXEL;
+    if (IMU_ENABLED) {
+        payload.featureMask |= FEATURE_IMU;
+    }
+    if (ULTRASONIC_COUNT > 0) {
+        payload.featureMask |= FEATURE_ULTRASONIC;
+    }
+    payload.sensorCapabilityMask = 0;
+    if (IMU_ENABLED) payload.sensorCapabilityMask |= SENSORCFG_IMU;
+    if (ULTRASONIC_COUNT > 0) payload.sensorCapabilityMask |= SENSORCFG_ULTRASONIC;
+    payload.dcMotorCount = NUM_DC_MOTORS;
+    payload.stepperCount = NUM_STEPPERS;
+    payload.servoChannelCount = NUM_SERVO_CHANNELS;
+    payload.ultrasonicMaxCount = TLV_MAX_ULTRASONICS;
+    payload.userLedCount = LED_COUNT;
+    payload.maxNeoPixelCount = NEOPIXEL_COUNT;
+    payload.limitSwitchMask = 0;
+    for (uint8_t i = 0; i < TLV_MAX_STEPPERS; ++i) {
+        payload.stepperHomeLimitGpio[i] = 0xFF;
+    }
+#if defined(PIN_ST1_LIMIT)
+    payload.limitSwitchMask |= 0x01U;
+    payload.stepperHomeLimitGpio[0] = PIN_ST1_LIMIT;
+#endif
+#if defined(PIN_ST2_LIMIT)
+    payload.limitSwitchMask |= 0x02U;
+    payload.stepperHomeLimitGpio[1] = PIN_ST2_LIMIT;
+#endif
+#if defined(PIN_ST3_LIMIT)
+    payload.limitSwitchMask |= 0x04U;
+    payload.stepperHomeLimitGpio[2] = PIN_ST3_LIMIT;
+#endif
+#if defined(PIN_ST4_LIMIT)
+    payload.limitSwitchMask |= 0x08U;
+    payload.stepperHomeLimitGpio[3] = PIN_ST4_LIMIT;
+#endif
+
+    appendTlv(SYS_INFO_RSP, sizeof(payload), &payload);
+}
+
+void MessageCenter::sendSysConfigRsp()
+{
+    PayloadSysConfigRsp payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.motorDirMask = motorDirMask_;
+    payload.configuredSensorMask = 0;
+    if (IMU_ENABLED) payload.configuredSensorMask |= SENSORCFG_IMU;
+    if (ULTRASONIC_COUNT > 0) payload.configuredSensorMask |= SENSORCFG_ULTRASONIC;
+    payload.neoPixelCount = neoPixelCount_;
+    payload.heartbeatTimeoutMs = heartbeatTimeoutMs_;
+
+    appendTlv(SYS_CONFIG_RSP, sizeof(payload), &payload);
+}
+
+void MessageCenter::sendSysDiagRsp()
+{
+    PayloadSysDiagRsp payload;
+    memset(&payload, 0, sizeof(payload));
     payload.freeSram = getFreeRAM();
     payload.loopTimeAvgUs = loopTimeAvgUs_;
     payload.loopTimeMaxUs = loopTimeMaxUs_;
     payload.uartRxErrors = uartRxErrors_;
-    payload.motorDirMask = motorDirMask_;
-    payload.neoPixelCount = neoPixelCount_;
-    payload.heartbeatTimeoutMs = heartbeatTimeoutMs_;
-    payload.limitSwitchMask = 0;
+    payload.crcErrors = crcErrorCount_;
+    payload.frameErrors = frameLenErrorCount_;
+    payload.tlvErrors = tlvErrorCount_;
+    payload.oversizeErrors = oversizeErrorCount_;
+    payload.txPendingBytes = getTxPendingBytes();
+    payload.txDroppedFrames = txDroppedFrames_;
 
-    // 0xFF = no home limit GPIO configured for this stepper
-    memset(payload.stepperHomeLimitGpio, 0xFF, sizeof(payload.stepperHomeLimitGpio));
+    appendTlv(SYS_DIAG_RSP, sizeof(payload), &payload);
+}
 
-    appendTelemetryTlv(SYS_STATUS, sizeof(payload), &payload);
+void MessageCenter::sendDCPidRsp(uint8_t motorId, uint8_t loopType)
+{
+    if (motorId >= NUM_DC_MOTORS || loopType > DC_PID_LOOP_VELOCITY) {
+        return;
+    }
+
+    PayloadDCPidRsp payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.motorId = motorId;
+    payload.loopType = loopType;
+    if (loopType == DC_PID_LOOP_POSITION) {
+        payload.kp = dcMotors[motorId].getPosKp();
+        payload.ki = dcMotors[motorId].getPosKi();
+        payload.kd = dcMotors[motorId].getPosKd();
+    } else {
+        payload.kp = dcMotors[motorId].getVelKp();
+        payload.ki = dcMotors[motorId].getVelKi();
+        payload.kd = dcMotors[motorId].getVelKd();
+    }
+    payload.maxOutput = PID_OUTPUT_MAX;
+    payload.maxIntegral = PID_OUTPUT_MAX;
+
+    appendTlv(DC_PID_RSP, sizeof(payload), &payload);
+}
+
+void MessageCenter::sendStepConfigRsp(uint8_t stepperId)
+{
+    if (stepperId >= NUM_STEPPERS) {
+        return;
+    }
+    StepperMotor *stepper = StepperManager::getStepper(stepperId);
+    if (!stepper) {
+        return;
+    }
+
+    PayloadStepConfigRsp payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.stepperId = stepperId;
+    payload.maxVelocity = stepper->getMaxVelocity();
+    payload.acceleration = stepper->getAcceleration();
+
+    appendTlv(STEP_CONFIG_RSP, sizeof(payload), &payload);
 }
 
 void MessageCenter::sendMagCalStatus()

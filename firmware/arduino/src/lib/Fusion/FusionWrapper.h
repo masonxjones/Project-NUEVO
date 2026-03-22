@@ -11,9 +11,10 @@ public:
     /**
      * Initialize the Fusion AHRS with default settings
      * @param sample_rate_hz Sampling rate in Hz
-     * @param gyroscope_range_dps Gyroscope range in degrees per second
+     * @param gyroscope_recovery_dps Angular-rate recovery threshold in degrees
+     * per second. Set to 0 to disable high-rate-triggered AHRS reset.
      */
-    FusionWrapper(float sample_rate_hz = 100.0f, float gyroscope_range_dps = 2000.0f);
+    FusionWrapper(float sample_rate_hz = 100.0f, float gyroscope_recovery_dps = 0.0f);
 
     /**
      * Reset the AHRS to initial state
@@ -78,16 +79,18 @@ public:
     /**
      * Configure AHRS settings
      * @param gain AHRS gain (default: 0.5, range: 0-1, higher = faster convergence)
-     * @param accel_rejection Acceleration rejection threshold in g (default: 10.0)
-     * @param mag_rejection Magnetic rejection threshold in µT (default: 10.0)
+     * @param accel_rejection_deg Accelerometer rejection threshold in DEGREES
+     * @param mag_rejection_deg Magnetometer rejection threshold in DEGREES
+     * @param recovery_period_s Recovery period in seconds
      */
     void setSettings(float gain = 0.5f,
-                    float accel_rejection = 10.0f,
-                    float mag_rejection = 10.0f);
+                     float accel_rejection_deg = 10.0f,
+                     float mag_rejection_deg = 10.0f,
+                     float recovery_period_s = 5.0f);
 
 private:
     FusionBias bias_;
     FusionAhrs ahrs_;
     float sample_rate_hz_;
-    float gyroscope_range_dps_;
+    float gyroscope_recovery_dps_;
 };

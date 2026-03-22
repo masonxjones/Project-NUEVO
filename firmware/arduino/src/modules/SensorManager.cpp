@@ -16,10 +16,11 @@
 // ============================================================================
 
 IMUDriver    SensorManager::imu_;
-FusionWrapper SensorManager::fusion_(SENSOR_UPDATE_FREQ_HZ, 2000.0f);
+FusionWrapper SensorManager::fusion_(IMU_UPDATE_FREQ_HZ, FUSION_GYRO_RECOVERY_DPS);
 
 bool     SensorManager::imuInitialized_ = false;
-uint32_t SensorManager::lastImuMicros_  = 0;
+uint32_t SensorManager::lastFusionMicros_ = 0;
+bool     SensorManager::imuSamplePending_ = false;
 uint16_t SensorManager::imuTimingAvgUs_ = 0;
 uint16_t SensorManager::imuTimingPeakUs_ = 0;
 uint16_t SensorManager::imuTimingMaxUs_ = 0;
@@ -34,10 +35,17 @@ float   SensorManager::rail5VVoltage_    = 0.0f;
 float   SensorManager::servoVoltage_     = 0.0f;
 
 MagCalData SensorManager::magCal_ = {
-    MAG_CAL_IDLE, 0,
+    MAG_CAL_STATE_IDLE, 0,
     0.0f, 0.0f,  0.0f, 0.0f,  0.0f, 0.0f,
     0.0f, 0.0f, 0.0f,
     false
+};
+bool  SensorManager::magCalBackupValid_ = false;
+float SensorManager::magCalBackupOffset_[3] = {0.0f, 0.0f, 0.0f};
+float SensorManager::magCalBackupMatrix_[9] = {
+    1.0f, 0.0f, 0.0f,
+    0.0f, 1.0f, 0.0f,
+    0.0f, 0.0f, 1.0f
 };
 
 bool     SensorManager::initialized_   = false;
@@ -72,6 +80,15 @@ void recordTiming(uint16_t elapsedUs,
     }
 }
 
+void setIdentityMatrix(float matrix[9]) {
+    for (uint8_t i = 0; i < 9; i++) {
+        matrix[i] = 0.0f;
+    }
+    matrix[0] = 1.0f;
+    matrix[4] = 1.0f;
+    matrix[8] = 1.0f;
+}
+
 } // namespace
 
 // ============================================================================
@@ -85,7 +102,7 @@ void SensorManager::init() {
     // A wire timeout is essential here: without it, a sick device can hold
     // setup() or the sensor task forever and starve UART servicing.
     Wire.begin();
-    Wire.setClock(I2C_BUS_CLOCK_HZ);
+    Wire.setClock(I2C_INIT_CLOCK_HZ);
     Wire.setWireTimeout(I2C_WIRE_TIMEOUT_US, true);
 
     // ADC reference: use default (AVCC = 5 V)
@@ -100,7 +117,10 @@ void SensorManager::init() {
 
     if (imuInitialized_) {
         // Apply fusion settings from config.h
-        fusion_.setSettings(FUSION_GAIN, FUSION_ACCEL_REJECTION, FUSION_MAG_REJECTION);
+        fusion_.setSettings(FUSION_GAIN,
+                            FUSION_ACCEL_REJECTION,
+                            FUSION_MAG_REJECTION,
+                            (float)FUSION_RECOVERY_PERIOD);
 
         // Load magnetometer calibration from persistent storage if available
         initMagCalFromStorage();
@@ -142,7 +162,13 @@ void SensorManager::init() {
     }
 #endif
 
-    lastImuMicros_ = micros();
+    // Runtime polling restores the faster IMU-oriented bus speed on each tick,
+    // but leave init() with that same runtime baseline to avoid surprising any
+    // later startup-time users of the shared Wire bus.
+    Wire.setClock(I2C_BUS_CLOCK_HZ);
+
+    lastFusionMicros_ = micros();
+    imuSamplePending_ = false;
     initialized_   = true;
 
 #ifdef DEBUG_SENSOR
@@ -158,6 +184,12 @@ void SensorManager::init() {
 
 void SensorManager::tick() {
     if (!initialized_) return;
+
+    // Other shared-bus users such as the PCA9685 servo driver may temporarily
+    // lower the Wire clock. Restore the sensor polling speed before every
+    // sensor-dispatch tick so IMU reads do not expand enough to starve the
+    // loop-owned DC compute round.
+    Wire.setClock(I2C_BUS_CLOCK_HZ);
 
     static uint8_t counter = 0;
 
@@ -176,70 +208,91 @@ void SensorManager::isrTick() {
 }
 
 // ============================================================================
-// update100Hz — IMU + Fusion AHRS (100 Hz)
+// update100Hz — alternating IMU/Fusion lane (100 Hz)
 // ============================================================================
 
 void SensorManager::update100Hz() {
+    static bool imuReadPhase = true;
+
 #if IMU_ENABLED
-    if (!imuInitialized_) return;
-    uint32_t imuStartUs = micros();
-    if (!imu_.update(true)) return;
-
-    uint32_t now   = micros();
-    float    dtSec = (now - lastImuMicros_) * 1e-6f;
-    lastImuMicros_ = now;
-
-    // Clamp dt: ignore startup spike or any gap > 100 ms
-    if (dtSec <= 0.0f || dtSec > 0.1f) dtSec = 1.0f / SENSOR_UPDATE_FREQ_HZ;
-
-    // Convert accel from mg → g for Fusion library
-    float ax = imu_.getAccX() * 0.001f;
-    float ay = imu_.getAccY() * 0.001f;
-    float az = imu_.getAccZ() * 0.001f;
-
-    if (isMagCalibrated()) {
-        // 9-DOF: fuse accelerometer, gyroscope, and calibrated magnetometer
-        fusion_.update(
-            imu_.getGyrX(), imu_.getGyrY(), imu_.getGyrZ(),
-            ax, ay, az,
-            imu_.getMagX(), imu_.getMagY(), imu_.getMagZ(),
-            dtSec
-        );
+    if (imuReadPhase) {
+        uint32_t imuStartUs = micros();
+        if (imuInitialized_ && imu_.update(true)) {
+            imuSamplePending_ = true;
+            if (magCal_.state == MAG_CAL_STATE_SAMPLING) {
+                updateMagCalSampling();
+            }
+        } else {
+            imuSamplePending_ = false;
+        }
+        recordTiming(Utility::clampElapsedUs(micros() - imuStartUs),
+                     imuTimingAvgUs_,
+                     imuTimingPeakUs_,
+                     imuTimingMaxUs_);
     } else {
-        // 6-DOF fallback: no magnetometer (yaw drifts with gyro integration)
-        fusion_.updateNoMag(
-            imu_.getGyrX(), imu_.getGyrY(), imu_.getGyrZ(),
-            ax, ay, az,
-            dtSec
-        );
-    }
+        uint32_t imuStartUs = micros();
+        if (imuInitialized_ && imuSamplePending_) {
+            uint32_t now = micros();
+            float dtSec = (lastFusionMicros_ == 0U)
+                              ? (1.0f / IMU_UPDATE_FREQ_HZ)
+                              : ((now - lastFusionMicros_) * 1e-6f);
+            lastFusionMicros_ = now;
 
-    if (magCal_.state == MAG_CAL_SAMPLING) {
-        updateMagCalSampling();
-    }
+            if (dtSec <= 0.0f || dtSec > 0.1f) {
+                dtSec = 1.0f / IMU_UPDATE_FREQ_HZ;
+            }
 
-    recordTiming(Utility::clampElapsedUs(micros() - imuStartUs),
-                 imuTimingAvgUs_,
-                 imuTimingPeakUs_,
-                 imuTimingMaxUs_);
+            float ax = imu_.getAccX() * 0.001f;
+            float ay = imu_.getAccY() * 0.001f;
+            float az = imu_.getAccZ() * 0.001f;
+
+            if (isMagCalibrated()) {
+                fusion_.update(
+                    imu_.getGyrX(), imu_.getGyrY(), imu_.getGyrZ(),
+                    ax, ay, az,
+                    imu_.getMagX(), imu_.getMagY(), imu_.getMagZ(),
+                    dtSec
+                );
+            } else {
+                fusion_.updateNoMag(
+                    imu_.getGyrX(), imu_.getGyrY(), imu_.getGyrZ(),
+                    ax, ay, az,
+                    dtSec
+                );
+            }
+            imuSamplePending_ = false;
+        }
+        recordTiming(Utility::clampElapsedUs(micros() - imuStartUs),
+                     imuTimingAvgUs_,
+                     imuTimingPeakUs_,
+                     imuTimingMaxUs_);
+    }
 #endif
+
+    if (!imuReadPhase) {
+        static uint8_t ultrasonicDivider = 0;
+        uint32_t ultrasonicStartUs = micros();
+        if (++ultrasonicDivider >= 5U) {
+            ultrasonicDivider = 0U;
+            for (uint8_t i = 0; i < ULTRASONIC_COUNT && i < SENSOR_MAX_ULTRASONICS; i++) {
+                if (ultrasonicFound_[i]) {
+                    ultrasonicDistMm_[i] = ultrasonics_[i].getDistanceMm();
+                }
+            }
+        }
+        recordTiming(Utility::clampElapsedUs(micros() - ultrasonicStartUs),
+                     ultrasonicTimingAvgUs_,
+                     ultrasonicTimingPeakUs_,
+                     ultrasonicTimingMaxUs_);
+    }
+
+    imuReadPhase = !imuReadPhase;
 }
 
-// ============================================================================
-// update50Hz — Ultrasonic reads (50 Hz)
-// ============================================================================
-
 void SensorManager::update50Hz() {
-    uint32_t ultrasonicStartUs = micros();
-    for (uint8_t i = 0; i < ULTRASONIC_COUNT && i < SENSOR_MAX_ULTRASONICS; i++) {
-        if (ultrasonicFound_[i]) {
-            ultrasonicDistMm_[i] = ultrasonics_[i].getDistanceMm();
-        }
-    }
-    recordTiming(Utility::clampElapsedUs(micros() - ultrasonicStartUs),
-                 ultrasonicTimingAvgUs_,
-                 ultrasonicTimingPeakUs_,
-                 ultrasonicTimingMaxUs_);
+    // Reserved medium-rate lane. The control-friendly profile alternates IMU
+    // bus reads and Fusion work above so a single sensor tick does not block
+    // loop() long enough to miss a DC control round.
 }
 
 // ============================================================================
@@ -319,16 +372,29 @@ bool SensorManager::isBatteryOvervoltage() {
 // ============================================================================
 
 void SensorManager::startMagCalibration() {
-    magCal_.state       = MAG_CAL_SAMPLING;
+    if (isMagCalibrated()) {
+        imu_.getMagCalibration(
+            magCalBackupOffset_[0], magCalBackupOffset_[1], magCalBackupOffset_[2], magCalBackupMatrix_);
+        magCalBackupValid_ = true;
+    } else {
+        magCalBackupValid_ = false;
+        magCalBackupOffset_[0] = 0.0f;
+        magCalBackupOffset_[1] = 0.0f;
+        magCalBackupOffset_[2] = 0.0f;
+        setIdentityMatrix(magCalBackupMatrix_);
+    }
+
+    magCal_.state       = MAG_CAL_STATE_SAMPLING;
     magCal_.sampleCount = 0;
     magCal_.minX = magCal_.maxX = 0.0f;
     magCal_.minY = magCal_.maxY = 0.0f;
     magCal_.minZ = magCal_.maxZ = 0.0f;
     magCal_.offsetX = magCal_.offsetY = magCal_.offsetZ = 0.0f;
+    magCal_.savedToEeprom = false;
 
-    // Zero IMU offsets during calibration so we collect raw magnetometer values.
-    // The new offsets will be applied after the user saves the calibration.
-    imu_.setMagOffset(0.0f, 0.0f, 0.0f);
+    // Clear the active calibration during sampling so the bridge receives raw
+    // magnetometer values in the accel/gyro frame.
+    imu_.clearMagCalibration();
 
     // Revert to 6-DOF during calibration (mag data is unreliable without offsets)
     fusion_.reset();
@@ -339,7 +405,7 @@ void SensorManager::startMagCalibration() {
 }
 
 void SensorManager::cancelMagCalibration() {
-    magCal_.state = MAG_CAL_IDLE;
+    restoreMagCalibrationBackup();
 #ifdef DEBUG_SENSOR
     DEBUG_SERIAL.println(F("[MagCal] Calibration cancelled"));
 #endif
@@ -353,34 +419,33 @@ bool SensorManager::saveMagCalibration() {
         DEBUG_SERIAL.print(F(" / "));
         DEBUG_SERIAL.println(MAG_CAL_MIN_SAMPLES);
 #endif
-        magCal_.state = MAG_CAL_ERROR;
+        magCal_.state = MAG_CAL_STATE_ERROR;
         return false;
     }
 
-    applyMagCalibration(magCal_.offsetX, magCal_.offsetY, magCal_.offsetZ);
+    float identity[9];
+    setIdentityMatrix(identity);
+    applyMagCalibration(magCal_.offsetX, magCal_.offsetY, magCal_.offsetZ, identity);
     return true;
 }
 
-void SensorManager::applyMagCalibration(float ox, float oy, float oz) {
+void SensorManager::applyMagCalibration(float ox, float oy, float oz, const float matrix[9]) {
     magCal_.offsetX = ox;
     magCal_.offsetY = oy;
     magCal_.offsetZ = oz;
 
-    // Push offsets to IMU driver (subtracted from each mag reading)
-    imu_.setMagOffset(ox, oy, oz);
+    imu_.setMagCalibration(ox, oy, oz, matrix);
 
-    // Persist via PersistentStorage module
-    PersistentStorage::setMagCalibration(ox, oy, oz);
+    PersistentStorage::setMagCalibration(ox, oy, oz, matrix);
 
-    // Switch Fusion to 9-DOF mode (will use magnetometer on next update)
-    magCal_.state         = MAG_CAL_SAVED;
-    magCal_.savedToEeprom = true;
+    magCal_.state         = MAG_CAL_STATE_SAVED;
+    magCal_.savedToEeprom = PersistentStorage::hasMagCalibration();
+    magCalBackupValid_    = false;
 
-    // Reset the AHRS so it re-converges with the now-valid magnetometer
     fusion_.reset();
 
 #ifdef DEBUG_SENSOR
-    DEBUG_SERIAL.println(F("[MagCal] Calibration saved and 9-DOF mode activated"));
+    DEBUG_SERIAL.println(F("[MagCal] Full calibration saved and 9-DOF mode activated"));
     DEBUG_SERIAL.print(F("  offsets (uT): "));
     DEBUG_SERIAL.print(ox); DEBUG_SERIAL.print(F(", "));
     DEBUG_SERIAL.print(oy); DEBUG_SERIAL.print(F(", "));
@@ -391,11 +456,12 @@ void SensorManager::applyMagCalibration(float ox, float oy, float oz) {
 void SensorManager::clearMagCalibration() {
     PersistentStorage::clearMagCalibration();
 
-    imu_.setMagOffset(0.0f, 0.0f, 0.0f);
+    imu_.clearMagCalibration();
     magCal_.savedToEeprom = false;
-    magCal_.state         = MAG_CAL_IDLE;
+    magCal_.state         = MAG_CAL_STATE_IDLE;
+    magCal_.sampleCount   = 0;
+    magCalBackupValid_    = false;
 
-    // Revert to 6-DOF (no mag fusion)
     fusion_.reset();
 
 #ifdef DEBUG_SENSOR
@@ -409,7 +475,9 @@ void SensorManager::clearMagCalibration() {
 
 void SensorManager::initMagCalFromStorage() {
     float ox, oy, oz;
-    if (!PersistentStorage::getMagCalibration(ox, oy, oz)) {
+    float matrix[9];
+    if (!PersistentStorage::getMagCalibration(ox, oy, oz, matrix)) {
+        magCal_.state = MAG_CAL_STATE_IDLE;
         magCal_.savedToEeprom = false;
         return;
     }
@@ -418,9 +486,33 @@ void SensorManager::initMagCalFromStorage() {
     magCal_.offsetY       = oy;
     magCal_.offsetZ       = oz;
     magCal_.savedToEeprom = true;
-    magCal_.state         = MAG_CAL_SAVED;
+    magCal_.state         = MAG_CAL_STATE_SAVED;
 
-    imu_.setMagOffset(ox, oy, oz);
+    imu_.setMagCalibration(ox, oy, oz, matrix);
+}
+
+void SensorManager::restoreMagCalibrationBackup() {
+    magCal_.sampleCount = 0;
+
+    if (magCalBackupValid_) {
+        imu_.setMagCalibration(
+            magCalBackupOffset_[0], magCalBackupOffset_[1], magCalBackupOffset_[2], magCalBackupMatrix_);
+        magCal_.offsetX = magCalBackupOffset_[0];
+        magCal_.offsetY = magCalBackupOffset_[1];
+        magCal_.offsetZ = magCalBackupOffset_[2];
+        magCal_.savedToEeprom = true;
+        magCal_.state = MAG_CAL_STATE_SAVED;
+    } else {
+        imu_.clearMagCalibration();
+        magCal_.offsetX = 0.0f;
+        magCal_.offsetY = 0.0f;
+        magCal_.offsetZ = 0.0f;
+        magCal_.savedToEeprom = false;
+        magCal_.state = MAG_CAL_STATE_IDLE;
+    }
+
+    magCalBackupValid_ = false;
+    fusion_.reset();
 }
 
 // ============================================================================

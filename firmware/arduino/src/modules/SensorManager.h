@@ -5,8 +5,9 @@
  * SensorManager is driven by a 100 Hz soft task in the main loop. Each tick
  * dispatches work at three rates using an internal 0–9 counter:
  *
- *   update100Hz()  — every tick       → 100 Hz: IMU read + Fusion AHRS
- *   update50Hz()   — even ticks       →  50 Hz: Ultrasonic sensors
+ *   update100Hz()  — every tick       → 100 Hz: alternating IMU read and
+ *                                               Fusion/ultrasonic phases
+ *   update50Hz()   — even ticks       →  50 Hz: reserved medium-rate lane
  *   update10Hz()   — tick 0 only      →  10 Hz: Voltages
  *
  * Call SensorManager::tick() from the soft scheduler. A compatibility wrapper
@@ -26,9 +27,9 @@
  * Calibration is only allowed in IDLE firmware state. The Bridge sends
  * SENSOR_MAG_CAL_CMD; the result is streamed back via SENSOR_MAG_CAL_STATUS.
  *
- *   IDLE → startMagCalibration() → SAMPLING (collecting min/max per axis)
- *        → saveMagCalibration()  → SAVED (offsets written to EEPROM, 9-DOF active)
- *        → cancelMagCalibration()→ IDLE (no change)
+ *   IDLE → startMagCalibration() → SAMPLING (collecting host-side fit samples)
+ *        → applyMagCalibration() → SAVED (offset + matrix written to EEPROM, 9-DOF active)
+ *        → cancelMagCalibration()→ restore previous calibration (or uncalibrated IDLE)
  *
  * Voltage Dividers (from PCB hardware design):
  *   VBAT  (A0): 50kΩ/10kΩ → 1:6 → 0–24 V maps to 0–4 V ADC
@@ -45,22 +46,11 @@
 #include "../drivers/IMUDriver.h"
 #include "../drivers/UltrasonicDriver.h"
 #include "../lib/Fusion/FusionWrapper.h"
+#include "../messages/TLV_Payloads.h"
 #include "PersistentStorage.h"
 
 // Maximum number of range sensors of each type (must match config.h defines)
 #define SENSOR_MAX_ULTRASONICS  4
-
-// ============================================================================
-// MAGNETOMETER CALIBRATION STATE
-// ============================================================================
-
-enum MagCalState : uint8_t {
-    MAG_CAL_IDLE     = 0,   // No calibration in progress
-    MAG_CAL_SAMPLING = 1,   // Collecting samples (spinning the robot)
-    MAG_CAL_COMPLETE = 2,   // Sampling done, offsets computed, not yet saved
-    MAG_CAL_SAVED    = 3,   // Offsets saved to EEPROM and active
-    MAG_CAL_ERROR    = 4    // Error (e.g., insufficient samples)
-};
 
 struct MagCalData {
     MagCalState state;
@@ -91,8 +81,9 @@ public:
      * @brief Soft-scheduler dispatch entry point (100 Hz)
      *
      * Dispatches sensor reads at three rates using an internal 0–9 counter:
-     *   - update100Hz()  every call       (100 Hz) — IMU + Fusion
-     *   - update50Hz()   every 2nd call   ( 50 Hz) — Ultrasonic
+     *   - update100Hz()  every call       (100 Hz) — alternating IMU read and
+     *                                                 Fusion/ultrasonic phases
+     *   - update50Hz()   every 2nd call   ( 50 Hz) — reserved medium-rate lane
      *   - update10Hz()   every 10th call  ( 10 Hz) — Voltages
      *
      * Call from the soft scheduler, not from an ISR.
@@ -133,8 +124,12 @@ public:
 
     /**
      * @brief Check if the magnetometer calibration is active (9-DOF fusion)
+     *
+     * This reflects the active runtime state, not whether the calibration was
+     * successfully persisted to EEPROM. Persistence is reported separately via
+     * MagCalData::savedToEeprom.
      */
-    static bool isMagCalibrated() { return magCal_.savedToEeprom || magCal_.state == MAG_CAL_COMPLETE; }
+    static bool isMagCalibrated() { return magCal_.state == MAG_CAL_STATE_SAVED; }
 
     /**
      * @brief Get latest raw IMU values (for TLV packing)
@@ -259,12 +254,11 @@ public:
     static bool saveMagCalibration();
 
     /**
-     * @brief Apply user-provided offsets directly and save to EEPROM
+     * @brief Apply user-provided hard/soft-iron calibration directly and save to EEPROM
      *
-     * Skips the sampling phase; offsets provided by the Bridge
-     * (e.g., from a previous calibration run on the host side).
+     * Skips the sampling phase; offset + matrix are provided by the Bridge.
      */
-    static void applyMagCalibration(float ox, float oy, float oz);
+    static void applyMagCalibration(float ox, float oy, float oz, const float matrix[9]);
 
     /**
      * @brief Clear EEPROM calibration and revert to 6-DOF mode
@@ -288,7 +282,8 @@ private:
     static IMUDriver    imu_;
     static FusionWrapper fusion_;
     static bool imuInitialized_;
-    static uint32_t lastImuMicros_;     // micros() at last IMU update (for dt)
+    static uint32_t lastFusionMicros_;  // micros() at last Fusion update (for dt)
+    static bool     imuSamplePending_;  // true after a raw read, until Fusion consumes it
     static uint16_t imuTimingAvgUs_;
     static uint16_t imuTimingPeakUs_;
     static uint16_t imuTimingMaxUs_;
@@ -309,6 +304,9 @@ private:
 
     // ---- Magnetometer calibration ----
     static MagCalData magCal_;
+    static bool       magCalBackupValid_;
+    static float      magCalBackupOffset_[3];
+    static float      magCalBackupMatrix_[9];
 
     // ---- Statistics ----
     static bool     initialized_;
@@ -316,12 +314,13 @@ private:
     static uint32_t lastUpdateTime_;
 
     // ---- ISR dispatch sub-tasks ----
-    static void update100Hz();   // IMU + Fusion AHRS          (100 Hz — every tick)
-    static void update50Hz();    // Ultrasonic reads           ( 50 Hz — even ticks)
+    static void update100Hz();   // Alternating IMU/Fusion lane (100 Hz — every tick)
+    static void update50Hz();    // Reserved medium-rate lane   ( 50 Hz — even ticks)
     static void update10Hz();    // Voltages only              ( 10 Hz — tick 0 only)
 
     // ---- Internal helpers ----
     static void initMagCalFromStorage();
+    static void restoreMagCalibrationBackup();
     static void updateVoltages();
     static void updateMagCalSampling();
     static uint16_t readADCAverage(uint8_t pin, uint8_t numSamples = 4);

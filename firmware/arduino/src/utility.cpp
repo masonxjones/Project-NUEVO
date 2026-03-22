@@ -42,7 +42,7 @@ Uart2FaultEdges sampleUart2FaultEdges() {
 void printStartupBanner() {
     DEBUG_SERIAL.println();
     DEBUG_SERIAL.println(F("========================================"));
-    DEBUG_SERIAL.println(F("  MAE 162 Robot Firmware v0.9.0"));
+    DEBUG_SERIAL.println(F("  MAE 162 Robot Firmware v0.9.5"));
     DEBUG_SERIAL.println(F("========================================"));
     DEBUG_SERIAL.println();
 }

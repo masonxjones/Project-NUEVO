@@ -131,8 +131,8 @@ bool SystemManager::canRunDriveActuator() {
 }
 
 bool SystemManager::canEnableServoActuator() {
-    return SensorManager::isBatteryPresent() &&
-           (getState() == SYS_STATE_RUNNING);
+    SystemState st = getState();
+    return (st == SYS_STATE_IDLE || st == SYS_STATE_RUNNING);
 }
 
 bool SystemManager::shouldTripHeartbeatFault() {

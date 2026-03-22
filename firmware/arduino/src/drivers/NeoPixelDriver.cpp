@@ -128,6 +128,13 @@ uint16_t NeoPixelDriver::getNumPixels() const {
     return strip_->numPixels();
 }
 
+uint32_t NeoPixelDriver::getPixelColor(uint16_t index) const {
+    if (!initialized_ || !strip_) return 0;
+    if (index >= strip_->numPixels()) return 0;
+
+    return strip_->getPixelColor(index);
+}
+
 // ============================================================================
 // COLOR UTILITIES
 // ============================================================================

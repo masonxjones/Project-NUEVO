@@ -238,7 +238,7 @@ public:
      */
     void setDirectPWM(int16_t pwm);
 
-    // PID gain getters for DC_STATUS_ALL telemetry
+    // PID gain getters for DC_PID_RSP and bridge-side state merge
     float getPosKp() const { return positionPID_.getKp(); }
     float getPosKi() const { return positionPID_.getKi(); }
     float getPosKd() const { return positionPID_.getKd(); }
@@ -251,20 +251,21 @@ public:
     // ========================================================================
 
     /**
-     * @brief Update motor control (call from scheduler @ 200Hz)
+     * @brief Apply the published output for this motor from the 800 Hz ISR slot.
      *
      * Fast ISR path:
-     * - Reads cached PWM prepared by service()
+     * - Reads the per-motor pending output already published by the coordinator
      * - Applies PWM output generation only
      */
     void update();
 
     /**
-     * @brief Refresh slow motor feedback outside ISR context
+     * @brief Compute the next control output for this motor outside ISR context
      *
-     * Called from a soft scheduler task. Updates the fixed-dt velocity
-     * estimate, optional current sense, stall detection bookkeeping, and
-     * cached control output for the next TIMER1 apply slot.
+     * Called from the mixed round-robin soft path once per motor control
+     * period (200 Hz per motor). Updates the fixed-dt velocity estimate,
+     * optional current sense, stall detection bookkeeping, and caches the next
+     * staged output for this motor's following TIMER1 slot.
      */
     void service();
 
@@ -280,8 +281,8 @@ public:
     /**
      * @brief Publish the staged control output into the live ISR cache.
      *
-     * Called at the round boundary from TIMER1 ISR so all motors switch to the
-     * next computed control round together.
+     * Called from the matching TIMER1 motor slot when the coordinator sees a
+     * staged output prepared for that motor's most recent request.
      */
     void publishStagedOutputISR();
 

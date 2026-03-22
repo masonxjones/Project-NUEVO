@@ -61,7 +61,7 @@ public:
     /**
      * @brief Reset pose to (0, 0, 0) and reseed the tick baseline.
      *
-     * Call once in setup() and again whenever SYS_CONFIG(resetOdometry=1)
+     * Call once in setup() and again whenever SYS_ODOM_RESET is handled
      * is received. Pass the current encoder counts so the first update()
      * call produces a zero delta.
      *

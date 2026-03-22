@@ -43,9 +43,9 @@
 
 #include <Arduino.h>
 #include <stdint.h>
-#include "../messages/TLV_Payloads.h"  // For StepperState enum
+#include "../messages/TLV_Payloads.h"  // For StepperMotionState enum
 
-// StepperState enum is defined in TLV_Payloads.h:
+// StepperMotionState enum is defined in TLV_Payloads.h:
 // STEPPER_IDLE, STEPPER_ACCEL, STEPPER_CRUISE, STEPPER_DECEL, STEPPER_HOMING
 
 // ============================================================================
@@ -199,7 +199,7 @@ public:
      *
      * @return Current stepper state
      */
-    StepperState getState() const { return state_; }
+    StepperMotionState getState() const { return state_; }
 
     /**
      * @brief Check if motor is moving
@@ -247,6 +247,13 @@ public:
     uint32_t getCurrentSpeed() const { return (uint32_t)currentVelocity_; }
 
     /**
+     * @brief Check the configured home/limit input state.
+     *
+     * Exposed for status reporting only.
+     */
+    bool isHomeLimitTriggered() const { return isLimitTriggered(); }
+
+    /**
      * @brief Get stepper ID
      *
      * @return Stepper identifier (0-3)
@@ -291,7 +298,7 @@ private:
     uint16_t acceleration_;     // Acceleration (steps/sec²)
 
     // Motion state
-    StepperState state_;        // Current motion state
+    StepperMotionState state_;  // Current motion state
     int32_t currentPosition_;   // Current position (steps)
     int32_t targetPosition_;    // Target position (steps)
     int32_t stepsRemaining_;    // Steps left in current move

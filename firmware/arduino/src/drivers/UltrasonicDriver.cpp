@@ -14,6 +14,7 @@ UltrasonicDriver::UltrasonicDriver()
 bool UltrasonicDriver::init(uint8_t i2cAddr) {
 #if ULTRASONIC_COUNT > 0
     i2cAddr_ = i2cAddr;
+    Wire.setClock(ULTRASONIC_I2C_CLOCK_HZ);
 
     if (!ultrasonic_.begin(i2cAddr_)) {
 #ifdef DEBUG_SENSOR
@@ -25,6 +26,7 @@ bool UltrasonicDriver::init(uint8_t i2cAddr) {
     }
 
     connected_ = true;
+    Wire.setClock(I2C_BUS_CLOCK_HZ);
 
 #ifdef DEBUG_SENSOR
     DEBUG_SERIAL.print(F("[Ultrasonic] Connected at 0x"));
@@ -41,13 +43,17 @@ bool UltrasonicDriver::init(uint8_t i2cAddr) {
 uint16_t UltrasonicDriver::getDistanceMm() {
 #if ULTRASONIC_COUNT > 0
     if (!connected_) return ULTRASONIC_ERROR_DISTANCE;
+    Wire.setClock(ULTRASONIC_I2C_CLOCK_HZ);
 
     uint16_t distance = 0;
 
     // triggerAndRead() returns sfTkError_t; 0 (ksfTkErrOk) means success
     if (ultrasonic_.triggerAndRead(distance) != 0) {
+        Wire.setClock(I2C_BUS_CLOCK_HZ);
         return ULTRASONIC_ERROR_DISTANCE;
     }
+
+    Wire.setClock(I2C_BUS_CLOCK_HZ);
 
     // The library already returns mm; 0 indicates a sensor error
     return distance;

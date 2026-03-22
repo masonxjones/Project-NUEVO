@@ -34,7 +34,7 @@ void SafetyManager::check() {
     // ── Fault response ────────────────────────────────────────────────────────
 
     // Build the trigger bitmask before changing state so the original cause
-    // is preserved in the latched SYS_STATUS error flags.
+    // is preserved in the latched SYS_STATE / SYS_DIAG fault view.
     uint8_t triggerFlags = 0;
     if (heartbeatFault)                      triggerFlags |= ERR_LIVENESS_LOST;
     triggerFlags |= SystemManager::getBatteryFaultFlags();

@@ -1,7 +1,7 @@
 #include "FusionWrapper.h"
 
-FusionWrapper::FusionWrapper(float sample_rate_hz, float gyroscope_range_dps)
-    : sample_rate_hz_(sample_rate_hz), gyroscope_range_dps_(gyroscope_range_dps)
+FusionWrapper::FusionWrapper(float sample_rate_hz, float gyroscope_recovery_dps)
+    : sample_rate_hz_(sample_rate_hz), gyroscope_recovery_dps_(gyroscope_recovery_dps)
 {
     // Initialize bias correction
     FusionBiasInitialise(&bias_, sample_rate_hz_);
@@ -19,15 +19,19 @@ void FusionWrapper::reset()
     FusionBiasInitialise(&bias_, sample_rate_hz_);
 }
 
-void FusionWrapper::setSettings(float gain, float accel_rejection, float mag_rejection)
+void FusionWrapper::setSettings(float gain,
+                                float accel_rejection_deg,
+                                float mag_rejection_deg,
+                                float recovery_period_s)
 {
+    const float clampedRecoverySeconds = recovery_period_s < 0.0f ? 0.0f : recovery_period_s;
     FusionAhrsSettings settings = {
         .convention = FusionConventionNwu,  // North-West-Up coordinate system
         .gain = gain,
-        .gyroscopeRange = gyroscope_range_dps_,
-        .accelerationRejection = accel_rejection,
-        .magneticRejection = mag_rejection,
-        .recoveryTriggerPeriod = static_cast<unsigned int>(5 * sample_rate_hz_)  // 5 seconds
+        .gyroscopeRange = gyroscope_recovery_dps_,
+        .accelerationRejection = accel_rejection_deg,
+        .magneticRejection = mag_rejection_deg,
+        .recoveryTriggerPeriod = static_cast<unsigned int>(clampedRecoverySeconds * sample_rate_hz_)
     };
 
     FusionAhrsSetSettings(&ahrs_, &settings);

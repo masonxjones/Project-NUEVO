@@ -35,6 +35,7 @@ uint8_t               UserIO::animPhase_       = 0;
 volatile SystemState  UserIO::pixelState_      = SYS_STATE_INIT;
 volatile bool         UserIO::pixelStateDirty_ = true;
 bool                  UserIO::neoAutoAnimate_  = true;
+uint32_t              UserIO::neoPixelColors_[(NEOPIXEL_COUNT > 0) ? NEOPIXEL_COUNT : 1] = {0};
 
 bool UserIO::initialized_ = false;
 
@@ -129,6 +130,9 @@ void UserIO::init() {
 
     // Initialize NeoPixel
     neopixel_.init(PIN_NEOPIXEL, 1, 128);  // 1 LED, 50% brightness
+    for (uint8_t i = 0; i < ((NEOPIXEL_COUNT > 0) ? NEOPIXEL_COUNT : 1); ++i) {
+        neoPixelColors_[i] = 0;
+    }
     queuePixelState(SystemManager::getState());
 
     // Prime input caches so button/limit status is valid immediately.
@@ -333,18 +337,26 @@ void UserIO::setPixelStateEstop() {
 }
 
 void UserIO::setNeoPixelColor(uint32_t color) {
+    neoPixelColors_[0] = color;
     neopixel_.setPixel(0, color);
     neopixel_.show();
 }
 
 void UserIO::setNeoPixelColor(uint8_t r, uint8_t g, uint8_t b) {
-    neopixel_.setPixel(0, r, g, b);
+    setBufferedNeoPixel(0, r, g, b);
     neopixel_.show();
 }
 
 void UserIO::setNeoPixelBrightness(uint8_t brightness) {
     neopixel_.setBrightness(brightness);
     neopixel_.show();
+}
+
+uint32_t UserIO::getNeoPixelColor(uint8_t index) {
+    if (index >= ((NEOPIXEL_COUNT > 0) ? NEOPIXEL_COUNT : 1)) {
+        return 0;
+    }
+    return neoPixelColors_[index];
 }
 
 void UserIO::setNeoAutoAnimate(bool enable) {
@@ -504,7 +516,7 @@ void UserIO::updateNeoPixelAnimation() {
             break;
     }
 
-    neopixel_.setPixel(0, r, g, b);
+    setBufferedNeoPixel(0, r, g, b);
     neopixel_.show();
 }
 
@@ -512,4 +524,12 @@ void UserIO::queuePixelState(SystemState state) {
     pixelState_ = state;
     pixelStateDirty_ = true;
     animPhase_ = 0;
+}
+
+void UserIO::setBufferedNeoPixel(uint8_t index, uint8_t r, uint8_t g, uint8_t b) {
+    if (index >= ((NEOPIXEL_COUNT > 0) ? NEOPIXEL_COUNT : 1)) {
+        return;
+    }
+    neoPixelColors_[index] = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    neopixel_.setPixel(index, r, g, b);
 }

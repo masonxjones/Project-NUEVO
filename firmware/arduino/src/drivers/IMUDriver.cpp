@@ -13,6 +13,50 @@
 
 namespace {
 
+#if IMU_ENABLED
+
+ICM_20948_ACCEL_CONFIG_FS_SEL_e accelRangeToEnum() {
+    switch (IMU_ACCEL_RANGE_G) {
+        case 2:  return gpm2;
+        case 4:  return gpm4;
+        case 8:  return gpm8;
+        case 16: return gpm16;
+        default: return gpm2;
+    }
+}
+
+ICM_20948_GYRO_CONFIG_1_FS_SEL_e gyroRangeToEnum() {
+    switch (IMU_GYRO_RANGE_DPS) {
+        case 250:  return dps250;
+        case 500:  return dps500;
+        case 1000: return dps1000;
+        case 2000: return dps2000;
+        default:   return dps250;
+    }
+}
+
+float accelLsbPerG() {
+    switch (IMU_ACCEL_RANGE_G) {
+        case 2:  return 16384.0f;
+        case 4:  return 8192.0f;
+        case 8:  return 4096.0f;
+        case 16: return 2048.0f;
+        default: return 16384.0f;
+    }
+}
+
+float gyroLsbPerDps() {
+    switch (IMU_GYRO_RANGE_DPS) {
+        case 250:  return 131.0f;
+        case 500:  return 65.5f;
+        case 1000: return 32.8f;
+        case 2000: return 16.4f;
+        default:   return 131.0f;
+    }
+}
+
+#endif
+
 int16_t readBe16(const uint8_t *buf) {
     return (int16_t)((((uint16_t)buf[0]) << 8) | (uint16_t)buf[1]);
 }
@@ -21,14 +65,14 @@ int16_t readLe16(const uint8_t *buf) {
     return (int16_t)((((uint16_t)buf[1]) << 8) | (uint16_t)buf[0]);
 }
 
+#if IMU_ENABLED
+
 float rawAccelToMg(int16_t raw) {
-    // startupDefault() configures the ICM-20948 to ±2 g accel range.
-    return ((float)raw) / 16.384f;
+    return (((float)raw) * 1000.0f) / accelLsbPerG();
 }
 
 float rawGyroToDps(int16_t raw) {
-    // startupDefault() configures the ICM-20948 to ±250 dps gyro range.
-    return ((float)raw) / 131.0f;
+    return ((float)raw) / gyroLsbPerDps();
 }
 
 float rawTempToC(int16_t raw) {
@@ -38,6 +82,50 @@ float rawTempToC(int16_t raw) {
 float rawMagToUt(int16_t raw) {
     return ((float)raw) * 0.15f;
 }
+
+void remapMagToImuFrame(float &mx, float &my, float &mz) {
+    // The ICM-20948 packages the accel/gyro die and the AK09916 magnetometer
+    // die in different physical orientations. We treat accel/gyro as already
+    // aligned with the rover body frame, so the magnetometer must be remapped
+    // into that same frame before calibration offsets or Fusion AHRS use it.
+    //
+    // Fixed package relationship for ICM-20948:
+    //   mag_X_body =  mag_X_ak09916
+    //   mag_Y_body = -mag_Y_ak09916
+    //   mag_Z_body = -mag_Z_ak09916
+    my = -my;
+    mz = -mz;
+}
+
+#endif
+
+void setIdentityMatrix(float matrix[9]) {
+    for (uint8_t i = 0; i < 9; i++) {
+        matrix[i] = 0.0f;
+    }
+    matrix[0] = 1.0f;
+    matrix[4] = 1.0f;
+    matrix[8] = 1.0f;
+}
+
+void copyMatrix(float dst[9], const float src[9]) {
+    for (uint8_t i = 0; i < 9; i++) {
+        dst[i] = src[i];
+    }
+}
+
+#if IMU_ENABLED
+
+void applyMatrix3x3(const float matrix[9], float &x, float &y, float &z) {
+    const float inX = x;
+    const float inY = y;
+    const float inZ = z;
+    x = matrix[0] * inX + matrix[1] * inY + matrix[2] * inZ;
+    y = matrix[3] * inX + matrix[4] * inY + matrix[5] * inZ;
+    z = matrix[6] * inX + matrix[7] * inY + matrix[8] * inZ;
+}
+
+#endif
 
 } // namespace
 
@@ -53,6 +141,7 @@ IMUDriver::IMUDriver()
     , temp_(0.0f)
     , magOffX_(0.0f), magOffY_(0.0f), magOffZ_(0.0f)
 {
+    setIdentityMatrix(magMatrix_);
 }
 
 // ============================================================================
@@ -76,6 +165,17 @@ bool IMUDriver::init(uint8_t ad0Val) {
         return false;
     }
 
+    ICM_20948_fss_t fullScale = {};
+    fullScale.a = accelRangeToEnum();
+    fullScale.g = gyroRangeToEnum();
+    if (imu_.setFullScale((ICM_20948_Internal_Acc | ICM_20948_Internal_Gyr), fullScale) != ICM_20948_Stat_Ok) {
+#ifdef DEBUG_SENSOR
+        DEBUG_SERIAL.print(F("[IMU] setFullScale failed: "));
+        DEBUG_SERIAL.println(imu_.statusString());
+#endif
+        return false;
+    }
+
     initialized_ = true;
 
 #ifdef DEBUG_SENSOR
@@ -83,7 +183,11 @@ bool IMUDriver::init(uint8_t ad0Val) {
     DEBUG_SERIAL.print(ad0Val);
     DEBUG_SERIAL.print(F(", addr=0x"));
     DEBUG_SERIAL.print(ad0Val ? 0x69 : 0x68, HEX);
-    DEBUG_SERIAL.println(F(")"));
+    DEBUG_SERIAL.print(F(", accel=+/-"));
+    DEBUG_SERIAL.print(IMU_ACCEL_RANGE_G);
+    DEBUG_SERIAL.print(F("g, gyro=+/-"));
+    DEBUG_SERIAL.print(IMU_GYRO_RANGE_DPS);
+    DEBUG_SERIAL.println(F(" dps)"));
 #endif
 
     return true;
@@ -145,9 +249,19 @@ bool IMUDriver::update(bool includeMag) {
         const bool magOverflow = (magStatus2 & 0x08U) != 0U;
 
         if (magReady && !magOverflow) {
-            magX_ = rawMagToUt(readLe16(&raw[15])) - magOffX_;
-            magY_ = rawMagToUt(readLe16(&raw[17])) - magOffY_;
-            magZ_ = rawMagToUt(readLe16(&raw[19])) - magOffZ_;
+            float magX = rawMagToUt(readLe16(&raw[15]));
+            float magY = rawMagToUt(readLe16(&raw[17]));
+            float magZ = rawMagToUt(readLe16(&raw[19]));
+            remapMagToImuFrame(magX, magY, magZ);
+
+            magX -= magOffX_;
+            magY -= magOffY_;
+            magZ -= magOffZ_;
+            applyMatrix3x3(magMatrix_, magX, magY, magZ);
+
+            magX_ = magX;
+            magY_ = magY;
+            magZ_ = magZ;
         }
     }
 
@@ -162,10 +276,31 @@ bool IMUDriver::update(bool includeMag) {
 // MAGNETOMETER CALIBRATION
 // ============================================================================
 
-void IMUDriver::setMagOffset(float ox, float oy, float oz) {
+void IMUDriver::setMagCalibration(float ox, float oy, float oz, const float matrix[9]) {
     magOffX_ = ox;
     magOffY_ = oy;
     magOffZ_ = oz;
+    copyMatrix(magMatrix_, matrix);
+}
+
+void IMUDriver::clearMagCalibration() {
+    magOffX_ = 0.0f;
+    magOffY_ = 0.0f;
+    magOffZ_ = 0.0f;
+    setIdentityMatrix(magMatrix_);
+}
+
+void IMUDriver::getMagCalibration(float& ox, float& oy, float& oz, float matrix[9]) const {
+    ox = magOffX_;
+    oy = magOffY_;
+    oz = magOffZ_;
+    copyMatrix(matrix, magMatrix_);
+}
+
+void IMUDriver::setMagOffset(float ox, float oy, float oz) {
+    float identity[9];
+    setIdentityMatrix(identity);
+    setMagCalibration(ox, oy, oz, identity);
 }
 
 void IMUDriver::getMagOffset(float& ox, float& oy, float& oz) const {

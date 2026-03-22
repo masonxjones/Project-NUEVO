@@ -14,6 +14,20 @@
  */
 
 #include "PersistentStorage.h"
+#include <math.h>
+
+namespace {
+
+void setIdentityMatrix(float matrix[9]) {
+    for (uint8_t i = 0; i < 9; i++) {
+        matrix[i] = 0.0f;
+    }
+    matrix[0] = 1.0f;
+    matrix[4] = 1.0f;
+    matrix[8] = 1.0f;
+}
+
+} // namespace
 
 // ============================================================================
 // STATIC MEMBER INITIALIZATION
@@ -27,22 +41,27 @@ bool PersistentStorage::valid_ = false;
 
 void PersistentStorage::init() {
     uint32_t magic = 0;
+    uint8_t version = 0;
     EEPROM.get(PS_BASE_ADDR + PS_OFF_MAGIC, magic);
+    EEPROM.get(PS_BASE_ADDR + PS_OFF_VERSION, version);
 
-    if (magic == PS_MAGIC) {
+    if (magic == PS_MAGIC && version == PS_VERSION) {
         valid_ = true;
         return;
     }
 
-    // First boot (or after reset()): write header + zero all fields
+    // First boot or layout upgrade: write header + defaults.
     writeHeader();
 
-    // No mag calibration by default
+    // No mag calibration by default.
     float zero = 0.0f;
+    float identity[9];
+    setIdentityMatrix(identity);
     EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_VALID, (uint8_t)0);
     EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_X, zero);
     EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_Y, zero);
     EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_Z, zero);
+    EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_MATRIX, identity);
 
     valid_ = true;
 }
@@ -77,7 +96,7 @@ uint8_t PersistentStorage::getVersion() {
 // MAGNETOMETER CALIBRATION
 // ============================================================================
 
-bool PersistentStorage::getMagCalibration(float& ox, float& oy, float& oz) {
+bool PersistentStorage::getMagCalibration(float& ox, float& oy, float& oz, float matrix[9]) {
     if (!valid_) return false;
     uint8_t valid = 0;
     EEPROM.get(PS_BASE_ADDR + PS_OFF_MAG_VALID, valid);
@@ -85,14 +104,23 @@ bool PersistentStorage::getMagCalibration(float& ox, float& oy, float& oz) {
     EEPROM.get(PS_BASE_ADDR + PS_OFF_MAG_X, ox);
     EEPROM.get(PS_BASE_ADDR + PS_OFF_MAG_Y, oy);
     EEPROM.get(PS_BASE_ADDR + PS_OFF_MAG_Z, oz);
+    for (uint8_t i = 0; i < 9; i++) {
+        EEPROM.get(PS_BASE_ADDR + PS_OFF_MAG_MATRIX + (int)(i * sizeof(float)), matrix[i]);
+        if (!isfinite(matrix[i])) {
+            return false;
+        }
+    }
     return true;
 }
 
-void PersistentStorage::setMagCalibration(float ox, float oy, float oz) {
+void PersistentStorage::setMagCalibration(float ox, float oy, float oz, const float matrix[9]) {
     if (!valid_) return;
     EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_X, ox);
     EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_Y, oy);
     EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_Z, oz);
+    for (uint8_t i = 0; i < 9; i++) {
+        EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_MATRIX + (int)(i * sizeof(float)), matrix[i]);
+    }
     EEPROM.put(PS_BASE_ADDR + PS_OFF_MAG_VALID, (uint8_t)1);  // mark valid last
 }
 

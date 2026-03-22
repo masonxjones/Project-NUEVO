@@ -61,7 +61,7 @@ Older notes may describe `LED_RED` as an automatic fault or battery indicator.
 
 That is no longer the current firmware policy.
 
-In `v0.9.0`:
+In `v0.9.5`:
 
 - the discrete LEDs are reserved for user/TLV control
 - the NeoPixel is the automatic system-state indicator

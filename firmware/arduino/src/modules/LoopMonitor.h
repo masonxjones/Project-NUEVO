@@ -126,6 +126,15 @@ public:
     static uint8_t getLiveFaultMask() { return liveFaultMask_; }
 
     /**
+     * @brief Return and clear the loop-fault event mask for protocol/UI use.
+     *
+     * Unlike getLiveFaultMask(), this event mask is consumed independently of
+     * the human-readable status reporter so a one-shot overrun warning can be
+     * forwarded to SYS_STATE without depending on StatusReporter::clearPeaks().
+     */
+    static uint8_t consumeFaultEventMask();
+
+    /**
      * @brief Clear cumulative loop-fault state (call on CMD_RESET).
      * Does NOT reset faultCount per slot.
      */
@@ -193,6 +202,7 @@ private:
     static RoundData        pidRound_;
     static volatile uint8_t faultMask_;     ///< cumulative OR of all overrun bits
     static volatile uint8_t liveFaultMask_; ///< rolling OR since last clearPeaks()
+    static volatile uint8_t eventFaultMask_; ///< consumable OR for SYS_STATE/UI warnings
 };
 
 #endif // LOOP_MONITOR_H

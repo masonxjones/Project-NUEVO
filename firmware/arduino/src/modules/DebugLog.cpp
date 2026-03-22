@@ -10,6 +10,7 @@ HardwareSerial &DEBUG_SERIAL_PORT = Serial;
 Print &DEBUG_SERIAL = DEBUG_LOG;
 
 char DebugLog::buffer_[DEBUG_LOG_BUFFER_SIZE];
+char DebugLog::printfBuffer_[256];
 uint16_t DebugLog::head_ = 0;
 uint16_t DebugLog::tail_ = 0;
 uint16_t DebugLog::droppedBytes_ = 0;
@@ -127,12 +128,11 @@ void DebugLog::printf_P(PGM_P format, ...)
         return;
     }
 
-    char line[512];
     va_list args;
     va_start(args, format);
-    vsnprintf_P(line, sizeof(line), format, args);
+    vsnprintf_P(printfBuffer_, sizeof(printfBuffer_), format, args);
     va_end(args);
-    pushBuffer(line);
+    pushBuffer(printfBuffer_);
 }
 
 void DebugLog::flush()
@@ -142,10 +142,12 @@ void DebugLog::flush()
     }
 
     int space = DEBUG_SERIAL_PORT.availableForWrite();
-    while (space > 0 && tail_ != head_) {
+    uint8_t budget = DEBUG_FLUSH_MAX_BYTES_PER_PASS;
+    while (space > 0 && tail_ != head_ && budget > 0U) {
         DEBUG_SERIAL_PORT.write((uint8_t)buffer_[tail_]);
         tail_ = (uint16_t)((tail_ + 1U) % DEBUG_LOG_BUFFER_SIZE);
         space--;
+        budget--;
     }
 }
 

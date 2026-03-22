@@ -163,6 +163,16 @@ public:
      */
     uint16_t getNumPixels() const;
 
+    /**
+     * @brief Get the buffered color of one pixel.
+     *
+     * Returns 0x00RRGGBB for RGB strips.
+     *
+     * @param index Pixel index
+     * @return Packed RGB color or 0 if out of range / uninitialized
+     */
+    uint32_t getPixelColor(uint16_t index) const;
+
     // ========================================================================
     // COLOR UTILITIES
     // ========================================================================

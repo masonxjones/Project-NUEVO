@@ -322,15 +322,8 @@ void DCMotor::service() {
     int32_t currentPosition = 0;
 
     if (encoder_) {
-        bool haveLatchedPosition = false;
         ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
             currentPosition = latchedPosition_;
-            haveLatchedPosition = positionLatched_;
-        }
-        if (!haveLatchedPosition) {
-            ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-                currentPosition = encoder_->getCount();
-            }
         }
 
         int32_t nextFeedbackQ16 = 0;
@@ -351,6 +344,7 @@ void DCMotor::service() {
         }
     }
 
+#if DC_CURRENT_SENSE_ENABLED
     if (hasCurrentSense_ && mode_ != DC_MODE_DISABLED) {
         const uint8_t numSamples = 2;
         uint16_t adcSum = 0;
@@ -364,13 +358,13 @@ void DCMotor::service() {
         if (pwmOutput_ == 0 && abs(newCurrentMa) < 50) newCurrentMa = 0;
         currentMa_ = (currentMa_ < 0) ? newCurrentMa : (int16_t)(((int32_t)newCurrentMa + currentMa_) / 2);
     }
+#else
+    currentMa_ = -1;
+#endif
 
 #if ENCODER_STALL_DETECTION
     if (!encoderFailed_ && encoder_) {
-        int32_t pos;
-        ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-            pos = encoder_->getCount();
-        }
+        const int32_t pos = currentPosition;
 
         if (abs(pwmOutput_) > ENCODER_FAIL_PWM_THRESHOLD) {
             if (!stuckTracking_ || pos != lastCheckedPos_) {

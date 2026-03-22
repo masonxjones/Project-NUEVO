@@ -1,4 +1,4 @@
-# Arduino Firmware v0.9.0
+# Arduino Firmware v0.9.5
 
 This directory contains the Arduino Mega 2560 firmware for the Project NUEVO robot controller. The firmware is responsible for:
 
@@ -8,7 +8,7 @@ This directory contains the Arduino Mega 2560 firmware for the Project NUEVO rob
 - system state management and safety policy
 - user I/O, discrete LEDs, and NeoPixel state indication
 
-The current `v0.9.0` profile is the first cleaned-up release after the ISR/UART stabilization work. The code is organized so [arduino/arduino.ino](arduino/arduino.ino) reads as the top-level entry point, while detailed ownership lives in modules under [`arduino/src/`](arduino/src/).
+The current `v0.9.5` profile is the current cleaned-up release after the ISR/UART stabilization work. The code is organized so [arduino/arduino.ino](arduino/arduino.ino) reads as the top-level entry point, while detailed ownership lives in modules under [`arduino/src/`](arduino/src/).
 
 ## Documentation Map
 
@@ -90,6 +90,18 @@ The millis-based scheduler owns jitter-tolerant tasks:
 - `taskUserIO()` at `20 Hz`
 - `StatusReporter::task()` at `1 Hz` when enabled
 
+When the full status reporter is disabled, the firmware can still emit short
+event-driven USB debug lines for new loop/UART/control faults. That lightweight
+path does not generate the large `[SYSTEM] / [TIMING] / [SENSORS] / [UART]`
+report.
+
+Inside `taskSensors()`, the current `v0.9.5` profile runs:
+
+- IMU raw read at `50 Hz`
+- Fusion update at `50 Hz` on the alternating sensor tick
+- ultrasonic sensors at `50 Hz`
+- voltage rails at `10 Hz`
+
 ## Major Subsystems
 
 | Module | Responsibility |
@@ -162,7 +174,7 @@ The rest of the file covers:
 
 - Discrete LEDs are reserved for user/TLV control.
 - The NeoPixel is the automatic system-state indicator.
-- The current supported WS2812 profile is a single state-indicator pixel with infrequent updates. Multi-pixel WS2812 animation is not part of the supported `v0.9.0` profile on the Mega 2560.
+- The current supported WS2812 profile is a single state-indicator pixel with infrequent updates. Multi-pixel WS2812 animation is not part of the supported `v0.9.5` profile on the Mega 2560.
 
 ## Test Sketches
 

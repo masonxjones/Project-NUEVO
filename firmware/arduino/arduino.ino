@@ -1,7 +1,7 @@
 /**
  * @file arduino.ino
  * @brief Main firmware for Arduino Mega 2560 educational robotics platform
- * @version 0.9.0
+ * @version 0.9.5
  *
  * Educational robotics platform firmware for MAE 162 course.
  * Provides real-time motor control, sensor integration, and
@@ -23,15 +23,16 @@
  * Initialization Order (setup):
  *  1. Debug serial (Serial0)
  *  2. Scheduler (millis-based soft scheduler)
- *  3. MessageCenter (Serial2 + TLV codec)
- *  4. SensorManager (I2C, ADC)
- *  5. UserIO (GPIO, NeoPixel)
- *  6. ServoController (PCA9685 via I2C)
- *  7. StepperManager (Timer3 — also starts stepper ISR)
- *  8. DC Motors (PWM pins, encoder counters)
- *  9. Attach encoder ISRs (via ISRScheduler helpers)
- * 10. Register periodic and fast-lane scheduler tasks
- * 11. Configure Timer1/Timer4 runtime timer hardware — LAST
+ *  3. PersistentStorage (EEPROM-backed settings/calibration)
+ *  4. MessageCenter (Serial2 + TLV codec)
+ *  5. SensorManager (I2C, ADC)
+ *  6. UserIO (GPIO, NeoPixel)
+ *  7. ServoController (PCA9685 via I2C)
+ *  8. StepperManager (Timer3 — also starts stepper ISR)
+ *  9. DC Motors (PWM pins, encoder counters)
+ * 10. Attach encoder ISRs (via ISRScheduler helpers)
+ * 11. Register periodic and fast-lane scheduler tasks
+ * 12. Configure Timer1/Timer4 runtime timer hardware — LAST
  *
  * Main Loop:
  * - Scheduler::serviceFastLane() handles work-available tasks
@@ -39,6 +40,7 @@
  */
 
 #include <util/atomic.h>
+#include <string.h>
 
 // ============================================================================
 // INCLUDES
@@ -58,6 +60,7 @@
 #include "src/modules/DCMotorBringup.h"
 #include "src/modules/LoopMonitor.h"
 #include "src/modules/MotorControlCoordinator.h"
+#include "src/modules/PersistentStorage.h"
 #include "src/modules/SafetyManager.h"
 #include "src/modules/StatusReporter.h"
 #include "src/messages/TLV_Payloads.h"
@@ -140,6 +143,64 @@ static void snapshotUart2FaultCounts(uint32_t &dor2, uint32_t &fe2) {
   interrupts();
 }
 
+static void appendFaultToken(char *buffer, size_t size, bool &first, const char *token) {
+  if (buffer == nullptr || token == nullptr || size == 0U) {
+    return;
+  }
+  if (!first) {
+    strlcat(buffer, ",", size);
+  }
+  strlcat(buffer, token, size);
+  first = false;
+}
+
+static void formatLoopFaultMask(uint8_t mask, char *buffer, size_t size) {
+  if (buffer == nullptr || size == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  bool first = true;
+  if ((mask & LOOP_FAULT_PID_ISR) != 0U) {
+    appendFaultToken(buffer, size, first, "pid");
+  }
+  if ((mask & LOOP_FAULT_STEPPER_ISR) != 0U) {
+    appendFaultToken(buffer, size, first, "step");
+  }
+  if ((mask & LOOP_FAULT_MOTOR_TASK) != 0U) {
+    appendFaultToken(buffer, size, first, "motor");
+  }
+  if ((mask & LOOP_FAULT_SENSOR_ISR) != 0U) {
+    appendFaultToken(buffer, size, first, "sensor");
+  }
+  if ((mask & LOOP_FAULT_UART_TASK) != 0U) {
+    appendFaultToken(buffer, size, first, "uart");
+  }
+  if ((mask & LOOP_FAULT_USERIO) != 0U) {
+    appendFaultToken(buffer, size, first, "io");
+  }
+  if ((mask & LOOP_FAULT_PID_ROUND) != 0U) {
+    appendFaultToken(buffer, size, first, "pidr");
+  }
+  if (first) {
+    strlcpy(buffer, "none", size);
+  }
+}
+
+static bool hasActiveDcControl() {
+  if (SystemManager::getState() != SYS_STATE_RUNNING) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < NUM_DC_MOTORS; i++) {
+    if (dcMotors[i].isEnabled()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static bool fastDrainUart() {
   int before = RPI_SERIAL.available();
   if (before <= 0) {
@@ -168,6 +229,9 @@ static bool fastMotorCompute() {
 
 static bool fastStatusChunk() {
 #if STATUS_REPORTER_ENABLED
+  if (hasActiveDcControl() && MotorControlCoordinator::hasPendingRound()) {
+    return false;
+  }
   uint16_t before = DebugLog::getQueuedBytes();
   StatusReporter::emitChunk();
   return DebugLog::getQueuedBytes() != before;
@@ -176,7 +240,137 @@ static bool fastStatusChunk() {
 #endif
 }
 
+static bool fastFaultEvents() {
+#if !FAULT_EVENT_LOG_ENABLED
+  return false;
+#else
+  static uint8_t lastLoopFaultMask = 0U;
+  static uint32_t lastMissedCount = 0U;
+  static uint32_t lastLateCount = 0U;
+  static uint32_t lastReusedCount = 0U;
+  static uint32_t lastCrossCount = 0U;
+  static uint32_t lastDorCount = 0U;
+  static uint32_t lastFeCount = 0U;
+  static uint16_t lastCrcCount = 0U;
+  static uint16_t lastFrameCount = 0U;
+  static uint16_t lastTlvCount = 0U;
+  static uint16_t lastOversizeCount = 0U;
+  static uint32_t lastEmitMs = 0U;
+
+  if (DebugLog::getQueuedBytes() > (DEBUG_LOG_BUFFER_SIZE / 2U)) {
+    return false;
+  }
+
+  uint32_t now = millis();
+  if ((uint32_t)(now - lastEmitMs) < FAULT_EVENT_MIN_INTERVAL_MS) {
+    return false;
+  }
+
+  uint8_t loopMask = LoopMonitor::getLatchedFaultMask();
+  uint8_t newLoopMask = (uint8_t)(loopMask & (uint8_t)~lastLoopFaultMask);
+  if (newLoopMask != 0U) {
+    char loopBuf[28];
+    formatLoopFaultMask(newLoopMask, loopBuf, sizeof(loopBuf));
+    DebugLog::printf_P(PSTR("[LOOP] %s\n"), loopBuf);
+    lastLoopFaultMask = loopMask;
+    lastEmitMs = now;
+    return true;
+  }
+  lastLoopFaultMask = loopMask;
+
+  uint32_t roundCount = 0;
+  uint32_t requestedRound = 0;
+  uint32_t computedRound = 0;
+  uint32_t appliedRound = 0;
+  uint8_t slot = 0;
+  uint8_t computeSeq = 0;
+  uint8_t appliedSeq = 0;
+  uint32_t missedCount = 0;
+  uint32_t lateCount = 0;
+  uint32_t reusedCount = 0;
+  uint32_t crossCount = 0;
+  bool computeBusy = false;
+  MotorControlCoordinator::snapshot(roundCount,
+                                    requestedRound,
+                                    computedRound,
+                                    appliedRound,
+                                    slot,
+                                    computeSeq,
+                                    appliedSeq,
+                                    missedCount,
+                                    lateCount,
+                                    reusedCount,
+                                    crossCount,
+                                    computeBusy);
+
+  uint32_t missedDelta = missedCount - lastMissedCount;
+  uint32_t lateDelta = lateCount - lastLateCount;
+  uint32_t reusedDelta = reusedCount - lastReusedCount;
+  uint32_t crossDelta = crossCount - lastCrossCount;
+  if (missedDelta != 0U || lateDelta != 0U || reusedDelta != 0U || crossDelta != 0U) {
+    DebugLog::printf_P(PSTR("[CTRL] miss+%lu late+%lu reuse+%lu cross+%lu\n"),
+                       (unsigned long)missedDelta,
+                       (unsigned long)lateDelta,
+                       (unsigned long)reusedDelta,
+                       (unsigned long)crossDelta);
+    lastMissedCount = missedCount;
+    lastLateCount = lateCount;
+    lastReusedCount = reusedCount;
+    lastCrossCount = crossCount;
+    lastEmitMs = now;
+    return true;
+  }
+  lastMissedCount = missedCount;
+  lastLateCount = lateCount;
+  lastReusedCount = reusedCount;
+  lastCrossCount = crossCount;
+
+  uint32_t dorCount = 0;
+  uint32_t feCount = 0;
+  snapshotUart2FaultCounts(dorCount, feCount);
+  uint16_t crcCount = MessageCenter::getCrcErrorCount();
+  uint16_t frameCount = MessageCenter::getFrameLenErrorCount();
+  uint16_t tlvCount = MessageCenter::getTlvErrorCount();
+  uint16_t oversizeCount = MessageCenter::getOversizeErrorCount();
+  uint32_t dorDelta = dorCount - lastDorCount;
+  uint32_t feDelta = feCount - lastFeCount;
+  uint16_t crcDelta = (uint16_t)(crcCount - lastCrcCount);
+  uint16_t frameDelta = (uint16_t)(frameCount - lastFrameCount);
+  uint16_t tlvDelta = (uint16_t)(tlvCount - lastTlvCount);
+  uint16_t oversizeDelta = (uint16_t)(oversizeCount - lastOversizeCount);
+  if (dorDelta != 0U || feDelta != 0U || crcDelta != 0U ||
+      frameDelta != 0U || tlvDelta != 0U || oversizeDelta != 0U) {
+    DebugLog::printf_P(PSTR("[UART] dor+%lu fe+%lu crc+%u frame+%u tlv+%u over+%u\n"),
+                       (unsigned long)dorDelta,
+                       (unsigned long)feDelta,
+                       (unsigned)crcDelta,
+                       (unsigned)frameDelta,
+                       (unsigned)tlvDelta,
+                       (unsigned)oversizeDelta);
+    lastDorCount = dorCount;
+    lastFeCount = feCount;
+    lastCrcCount = crcCount;
+    lastFrameCount = frameCount;
+    lastTlvCount = tlvCount;
+    lastOversizeCount = oversizeCount;
+    lastEmitMs = now;
+    return true;
+  }
+  lastDorCount = dorCount;
+  lastFeCount = feCount;
+  lastCrcCount = crcCount;
+  lastFrameCount = frameCount;
+  lastTlvCount = tlvCount;
+  lastOversizeCount = oversizeCount;
+
+  return false;
+#endif
+}
+
 static bool fastDebugFlush() {
+  if (hasActiveDcControl() && MotorControlCoordinator::hasPendingRound()) {
+    return false;
+  }
   uint16_t before = DebugLog::getQueuedBytes();
   if (before == 0U) {
     return false;
@@ -191,15 +385,15 @@ static bool fastDebugFlush() {
 /**
  * @brief Timer1 overflow ISR — short round-robin DC apply slot.
  *
- * One motor is serviced per 800 Hz tick, giving each DC motor a 200 Hz apply
- * cadence while keeping the per-slice ISR body comfortably inside the UART
- * safety budget. This uses a fixed one-round pipeline:
- * - slot 0 of round N publishes outputs computed for round N
- * - loop() computes outputs for round N+1 during round N
+ * One motor is serviced per 800 Hz tick, giving each DC motor a 200 Hz
+ * latch/apply cadence while keeping the per-slice ISR body comfortably inside
+ * the UART safety budget. The matching loop-side compute now runs one motor at
+ * a time in the same round-robin order instead of batching all four motors
+ * into one 5 ms software round.
  */
 ISR(TIMER1_OVF_vect) {
   uint16_t t0 = Utility::readTimer1CounterTicks(); // Sample time stamp for the LoopMonitor
-  bool running = (SystemManager::getState() == SYS_STATE_RUNNING);
+  bool running = hasActiveDcControl();
   uint16_t pidRoundSpanUs =
       MotorControlCoordinator::servicePidIsrSlice(dcMotors, NUM_DC_MOTORS, running);
 
@@ -298,17 +492,18 @@ void taskSafety() {
 }
 
 // ============================================================================
-// SOFT TASK — taskMotors (round-driven, loop-owned)
+// SOFT TASK — taskMotors (per-slot mixed round-robin, loop-owned)
 // ============================================================================
 
 /**
- * @brief Run the full software DC compute round when a new ISR round completes.
+ * @brief Run one software DC compute slot matching the pending ISR request.
  *
- * The compute round is triggered from slot 0 of the current round and prepares
- * the outputs that will be published at slot 0 of the next round.
+ * The Timer1 ISR latches/applies one motor every 800 Hz slot and queues that
+ * same motor for one loop-owned compute pass. This keeps each motor at 200 Hz
+ * control while avoiding a 4-motor batch compute in a single loop pass.
  */
 void taskMotors() {
-  if (SystemManager::getState() != SYS_STATE_RUNNING) {
+  if (!hasActiveDcControl()) {
     MotorControlCoordinator::resetForNonRunningTask();
     return;
   }
@@ -318,16 +513,22 @@ void taskMotors() {
   if (!MotorControlCoordinator::beginCompute(requestedRound, slotSnapshot)) {
     return;
   }
-  (void)slotSnapshot;
 
-  uint32_t t0 = micros();
-  for (uint8_t i = 0; i < NUM_DC_MOTORS; i++) {
-    dcMotors[i].service();
-  }
+  uint32_t taskStartUs = micros();
+  do {
+    dcMotors[slotSnapshot].service();
+    MotorControlCoordinator::finishCompute(requestedRound);
 
-  uint16_t elapsedUs = Utility::clampElapsedUs(micros() - t0);
-  MotorControlCoordinator::finishCompute(requestedRound);
-  LoopMonitor::record(SLOT_MOTOR_TASK, elapsedUs);
+    if (!MotorControlCoordinator::hasPendingRound()) {
+      break;
+    }
+
+    if (Utility::clampElapsedUs(micros() - taskStartUs) >= MOTOR_TASK_CATCHUP_BUDGET_US) {
+      break;
+    }
+  } while (MotorControlCoordinator::beginCompute(requestedRound, slotSnapshot));
+
+  LoopMonitor::record(SLOT_MOTOR_TASK, Utility::clampElapsedUs(micros() - taskStartUs));
 }
 
 // ============================================================================
@@ -437,6 +638,7 @@ void setup() {
   DebugLog::setPassthrough(true);
   LoopMonitor::init();
   MotorControlCoordinator::init();
+  PersistentStorage::init();
   StatusReporter::init(snapshotUart2FaultCounts, MotorControlCoordinator::snapshot);
   Utility::printStartupBanner();
 
@@ -458,7 +660,11 @@ void setup() {
 #if SERVO_CONTROLLER_ENABLED
   DEBUG_SERIAL.println(F("[Setup] Initializing servo controller..."));
   ServoController::init();
-  DEBUG_SERIAL.println(F("  - PCA9685 initialized (50Hz PWM)"));
+  if (ServoController::isInitialized()) {
+    DEBUG_SERIAL.println(F("  - PCA9685 initialized (50Hz PWM)"));
+  } else {
+    DEBUG_SERIAL.println(F("  - PCA9685 not detected"));
+  }
 #endif
 
   DEBUG_SERIAL.println(F("[Setup] Initializing stepper motors..."));
@@ -488,33 +694,39 @@ void setup() {
   // 6. Register cooperative fast-lane and periodic soft tasks.
   DEBUG_SERIAL.println(F("[Setup] Registering scheduler tasks..."));
 
-  fastTaskId = Scheduler::registerFastTask(fastDrainUart, 0);
-  if (fastTaskId >= 0) {
-    DEBUG_SERIAL.print(F("  - Fast UART RX: Task #"));
-    DEBUG_SERIAL.println(fastTaskId);
-  }
-
-  fastTaskId = Scheduler::registerFastTask(fastDrainTx, 1);
-  if (fastTaskId >= 0) {
-    DEBUG_SERIAL.print(F("  - Fast UART TX: Task #"));
-    DEBUG_SERIAL.println(fastTaskId);
-  }
-
-  fastTaskId = Scheduler::registerFastTask(fastMotorCompute, 2);
+  fastTaskId = Scheduler::registerFastTask(fastMotorCompute, 0);
   if (fastTaskId >= 0) {
     DEBUG_SERIAL.print(F("  - Fast MotorCompute: Task #"));
     DEBUG_SERIAL.println(fastTaskId);
   }
 
+  fastTaskId = Scheduler::registerFastTask(fastDrainUart, 1);
+  if (fastTaskId >= 0) {
+    DEBUG_SERIAL.print(F("  - Fast UART RX: Task #"));
+    DEBUG_SERIAL.println(fastTaskId);
+  }
+
+  fastTaskId = Scheduler::registerFastTask(fastDrainTx, 2);
+  if (fastTaskId >= 0) {
+    DEBUG_SERIAL.print(F("  - Fast UART TX: Task #"));
+    DEBUG_SERIAL.println(fastTaskId);
+  }
+
+  fastTaskId = Scheduler::registerFastTask(fastFaultEvents, 3);
+  if (fastTaskId >= 0) {
+    DEBUG_SERIAL.print(F("  - Fast FaultEvents: Task #"));
+    DEBUG_SERIAL.println(fastTaskId);
+  }
+
 #if STATUS_REPORTER_ENABLED
-  fastTaskId = Scheduler::registerFastTask(fastStatusChunk, 3);
+  fastTaskId = Scheduler::registerFastTask(fastStatusChunk, 4);
   if (fastTaskId >= 0) {
     DEBUG_SERIAL.print(F("  - Fast StatusChunk: Task #"));
     DEBUG_SERIAL.println(fastTaskId);
   }
 #endif
 
-  fastTaskId = Scheduler::registerFastTask(fastDebugFlush, 4);
+  fastTaskId = Scheduler::registerFastTask(fastDebugFlush, 5);
   if (fastTaskId >= 0) {
     DEBUG_SERIAL.print(F("  - Fast DebugFlush: Task #"));
     DEBUG_SERIAL.println(fastTaskId);
@@ -538,7 +750,7 @@ void setup() {
     DEBUG_SERIAL.println(F("ms (100Hz)"));
   }
 
-  DEBUG_SERIAL.println(F("  - Motors: round-driven in loop() from Timer1 slot-3 flag"));
+  DEBUG_SERIAL.println(F("  - Motors: per-slot mixed round-robin from Timer1 requests"));
 
   taskId = Scheduler::registerTask(taskSensors, 1000 / SENSOR_UPDATE_FREQ_HZ, 3);
   if (taskId >= 0) {

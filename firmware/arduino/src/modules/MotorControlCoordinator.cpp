@@ -2,6 +2,7 @@
 
 #include <util/atomic.h>
 
+#include "../config.h"
 #include "../drivers/DCMotor.h"
 
 volatile uint32_t MotorControlCoordinator::roundCount_ = 0;
@@ -12,15 +13,30 @@ volatile uint8_t MotorControlCoordinator::currentSlot_ = 0;
 volatile uint8_t MotorControlCoordinator::isrSlot_ = 0;
 volatile uint32_t MotorControlCoordinator::roundStartUs_ = 0;
 volatile uint8_t MotorControlCoordinator::computeSeq_ = 0;
-volatile uint8_t MotorControlCoordinator::preparedSeq_ = 0;
 volatile uint8_t MotorControlCoordinator::appliedSeq_ = 0;
 volatile uint32_t MotorControlCoordinator::missedRoundCount_ = 0;
 volatile uint32_t MotorControlCoordinator::lateComputeCount_ = 0;
 volatile uint32_t MotorControlCoordinator::reusedOutputCount_ = 0;
 volatile uint32_t MotorControlCoordinator::crossRoundComputeCount_ = 0;
-volatile bool MotorControlCoordinator::roundReady_ = false;
-volatile bool MotorControlCoordinator::outputsReady_ = false;
+volatile uint32_t MotorControlCoordinator::requestedSeqBySlot_[MotorControlCoordinator::kMaxMotorSlots] = {};
+volatile uint32_t MotorControlCoordinator::preparedSeqBySlot_[MotorControlCoordinator::kMaxMotorSlots] = {};
+volatile uint8_t MotorControlCoordinator::pendingMask_ = 0;
 volatile bool MotorControlCoordinator::computeBusy_ = false;
+volatile uint8_t MotorControlCoordinator::computeSlot_ = 0;
+volatile uint32_t MotorControlCoordinator::computeRequestSeq_ = 0;
+
+void MotorControlCoordinator::clearPendingState() {
+    pendingMask_ = 0;
+    computeBusy_ = false;
+    computeSlot_ = 0;
+    computeRequestSeq_ = 0;
+    isrSlot_ = 0;
+    currentSlot_ = 0;
+    for (uint8_t i = 0; i < kMaxMotorSlots; i++) {
+        requestedSeqBySlot_[i] = 0;
+        preparedSeqBySlot_[i] = 0;
+    }
+}
 
 void MotorControlCoordinator::init() {
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -32,15 +48,12 @@ void MotorControlCoordinator::init() {
         isrSlot_ = 0;
         roundStartUs_ = 0;
         computeSeq_ = 0;
-        preparedSeq_ = 0;
         appliedSeq_ = 0;
         missedRoundCount_ = 0;
         lateComputeCount_ = 0;
         reusedOutputCount_ = 0;
         crossRoundComputeCount_ = 0;
-        roundReady_ = false;
-        outputsReady_ = false;
-        computeBusy_ = false;
+        clearPendingState();
     }
 }
 
@@ -88,33 +101,12 @@ bool MotorControlCoordinator::isComputeBusy() {
     return value;
 }
 
-void MotorControlCoordinator::beginPidRoundIsr(DCMotor *motors, uint8_t motorCount, bool running) {
-    if (running) {
-        roundCount_++;
-        uint32_t currentRound = roundCount_;
-        if (outputsReady_ && computedRound_ == currentRound) {
-            for (uint8_t i = 0; i < motorCount; i++) {
-                motors[i].publishStagedOutputISR();
-            }
-            appliedSeq_ = preparedSeq_;
-            appliedRound_ = currentRound;
-            outputsReady_ = false;
-        } else {
-            reusedOutputCount_++;
-        }
-        if (roundReady_) {
-            missedRoundCount_++;
-        }
-        requestedRound_ = currentRound + 1U;
-        roundReady_ = true;
-    } else {
-        outputsReady_ = false;
-        roundReady_ = false;
-        requestedRound_ = roundCount_;
-        computedRound_ = roundCount_;
-        appliedRound_ = roundCount_;
-        appliedSeq_ = preparedSeq_;
+bool MotorControlCoordinator::hasPendingRound() {
+    bool value;
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        value = (pendingMask_ != 0U) || computeBusy_;
     }
+    return value;
 }
 
 uint16_t MotorControlCoordinator::servicePidIsrSlice(DCMotor *motors,
@@ -129,11 +121,47 @@ uint16_t MotorControlCoordinator::servicePidIsrSlice(DCMotor *motors,
 
     if (slot == 0U) {
         roundStartUs_ = micros();
-        beginPidRoundIsr(motors, motorCount, running);
+        if (running) {
+            roundCount_++;
+        }
     }
 
-    motors[slot].latchFeedbackISR();
-    motors[slot].update();
+    if (!running) {
+        clearPendingState();
+        requestedRound_ = roundCount_;
+        computedRound_ = roundCount_;
+        appliedRound_ = roundCount_;
+        appliedSeq_ = computeSeq_;
+    } else {
+        const uint8_t slotBit = (uint8_t)(1U << slot);
+        const uint32_t expectedSeq = requestedSeqBySlot_[slot];
+
+        if (expectedSeq != 0U) {
+            if (preparedSeqBySlot_[slot] == expectedSeq) {
+                motors[slot].publishStagedOutputISR();
+                appliedRound_ = expectedSeq;
+                appliedSeq_ = (uint8_t)appliedRound_;
+            } else {
+                reusedOutputCount_++;
+            }
+        }
+
+        motors[slot].latchFeedbackISR();
+        motors[slot].update();
+
+        if (motors[slot].isEnabled()) {
+            if ((pendingMask_ & slotBit) != 0U || (computeBusy_ && computeSlot_ == slot)) {
+                missedRoundCount_++;
+            }
+            requestedRound_++;
+            requestedSeqBySlot_[slot] = requestedRound_;
+            pendingMask_ |= slotBit;
+        } else {
+            pendingMask_ &= (uint8_t)~slotBit;
+            requestedSeqBySlot_[slot] = 0U;
+            preparedSeqBySlot_[slot] = 0U;
+        }
+    }
 
     uint16_t completedRoundUs = 0U;
     if (slot == (uint8_t)(motorCount - 1U) && running) {
@@ -148,29 +176,47 @@ uint16_t MotorControlCoordinator::servicePidIsrSlice(DCMotor *motors,
 
 void MotorControlCoordinator::resetForNonRunningTask() {
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        computeBusy_ = false;
-        roundReady_ = false;
-        outputsReady_ = false;
-        isrSlot_ = 0;
-        currentSlot_ = 0;
+        clearPendingState();
         requestedRound_ = roundCount_;
         computedRound_ = roundCount_;
+        appliedRound_ = roundCount_;
     }
 }
 
 bool MotorControlCoordinator::beginCompute(uint32_t &requestedRound, uint8_t &slotSnapshot) {
     bool shouldRun = false;
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        if (roundReady_ && !computeBusy_) {
-            requestedRound = requestedRound_;
-            slotSnapshot = currentSlot_;
-            roundReady_ = false;
+        if (pendingMask_ != 0U && !computeBusy_) {
+            uint8_t oldestSlot = 0xFFU;
+            uint32_t oldestSeq = 0xFFFFFFFFUL;
+            for (uint8_t i = 0; i < kMaxMotorSlots; i++) {
+                const uint8_t slotBit = (uint8_t)(1U << i);
+                if ((pendingMask_ & slotBit) == 0U) {
+                    continue;
+                }
+                const uint32_t seq = requestedSeqBySlot_[i];
+                if (seq != 0U && seq < oldestSeq) {
+                    oldestSeq = seq;
+                    oldestSlot = i;
+                }
+            }
+
+            if (oldestSlot != 0xFFU) {
+                requestedRound = oldestSeq;
+                slotSnapshot = oldestSlot;
+                computeSlot_ = oldestSlot;
+                computeRequestSeq_ = oldestSeq;
+                currentSlot_ = oldestSlot;
+                shouldRun = true;
+            }
+        }
+
+        if (shouldRun) {
             computeBusy_ = true;
-            shouldRun = true;
         }
     }
 
-    if (shouldRun && slotSnapshot == 0U) {
+    if (shouldRun && (requestedRound + (uint32_t)NUM_DC_MOTORS) <= requestedRound_) {
         lateComputeCount_++;
     }
 
@@ -179,13 +225,27 @@ bool MotorControlCoordinator::beginCompute(uint32_t &requestedRound, uint8_t &sl
 
 void MotorControlCoordinator::finishCompute(uint32_t requestedRound) {
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        if (roundCount_ >= requestedRound) {
-            crossRoundComputeCount_++;
+        const uint8_t slot = computeSlot_;
+        const uint8_t slotBit = (uint8_t)(1U << slot);
+
+        if (computeRequestSeq_ != requestedRound) {
+            computeBusy_ = false;
+            computeSlot_ = 0U;
+            computeRequestSeq_ = 0U;
+            return;
         }
-        computeSeq_++;
-        preparedSeq_ = computeSeq_;
-        computedRound_ = requestedRound;
-        outputsReady_ = true;
+
+        if (requestedSeqBySlot_[slot] != requestedRound) {
+            crossRoundComputeCount_++;
+        } else {
+            preparedSeqBySlot_[slot] = requestedRound;
+            pendingMask_ &= (uint8_t)~slotBit;
+            computedRound_ = requestedRound;
+            computeSeq_ = (uint8_t)computedRound_;
+        }
+
         computeBusy_ = false;
+        computeSlot_ = 0U;
+        computeRequestSeq_ = 0U;
     }
 }

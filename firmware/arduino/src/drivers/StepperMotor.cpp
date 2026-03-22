@@ -210,7 +210,7 @@ void StepperMotor::moveSteps(int32_t steps) {
         accelDeltaQ16 = (((uint32_t)(startInterval - minInterval)) << kQ16Shift) / accelSteps;
         decelDeltaQ16 = accelDeltaQ16;
     }
-    StepperState nextState = STEPPER_DECEL;
+    StepperMotionState nextState = STEPPER_DECEL;
     if (accelSteps > 0) nextState = STEPPER_ACCEL;
     else if (cruiseSteps > 0) nextState = STEPPER_CRUISE;
 

@@ -1,6 +1,6 @@
 # Firmware Technical Notes
 
-This document captures the low-level constraints and design choices behind the current `v0.9.0` firmware profile.
+This document captures the low-level constraints and design choices behind the current `v0.9.5` firmware profile.
 
 Use this together with:
 
@@ -114,7 +114,7 @@ Rule of thumb:
 - about `30 us` per RGB pixel
 - plus the frame latch/reset time
 
-That makes multi-pixel WS2812 animation a bad fit for this firmware. The supported `v0.9.0` profile is:
+That makes multi-pixel WS2812 animation a bad fit for this firmware. The supported `v0.9.5` profile is:
 
 - one pixel
 - infrequent updates
@@ -157,11 +157,22 @@ The human-readable status reporter is kept because it is useful for field stabil
 - `SystemManager` decides transitions
 - `SafetyManager` only detects faults
 - `MessageCenter` owns communication
+- `DebugLog::flush()` is intentionally time-sliced so USB debug output cannot
+  monopolize the loop during active control
 
 Status reporting can be disabled from `config.h`:
 
 - `STATUS_REPORTER_ENABLED`
 - `STATUS_REPORT_HZ`
+
+Independent of the full reporter, the firmware can also keep a lightweight
+fault-event logger enabled:
+
+- `FAULT_EVENT_LOG_ENABLED`
+- `FAULT_EVENT_MIN_INTERVAL_MS`
+
+That path only emits short one-line USB debug messages when new loop, control,
+or UART faults appear.
 
 ## Memory Headroom
 

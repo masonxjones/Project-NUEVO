@@ -27,6 +27,7 @@ LoopMonitor::SlotData    LoopMonitor::slots_[LOOP_SLOT_COUNT] = {};
 LoopMonitor::RoundData   LoopMonitor::pidRound_               = {};
 volatile uint8_t         LoopMonitor::faultMask_              = 0;
 volatile uint8_t         LoopMonitor::liveFaultMask_          = 0;
+volatile uint8_t         LoopMonitor::eventFaultMask_         = 0;
 
 // ============================================================================
 // PUBLIC METHODS
@@ -52,6 +53,7 @@ void LoopMonitor::init()
 
     faultMask_ = 0;
     liveFaultMask_ = 0;
+    eventFaultMask_ = 0;
 }
 
 bool LoopMonitor::record(LoopSlot slot, uint16_t us)
@@ -78,6 +80,7 @@ bool LoopMonitor::record(LoopSlot slot, uint16_t us)
         if (s.faultCount < 0xFFFF) s.faultCount++;
         faultMask_ |= (uint8_t)(1u << slot);
         liveFaultMask_ |= (uint8_t)(1u << slot);
+        eventFaultMask_ |= (uint8_t)(1u << slot);
     }
     return overrun;
 }
@@ -104,7 +107,15 @@ void LoopMonitor::recordPidRoundSpan(uint16_t spanUs, bool active)
         if (pidRound_.faultCount < 0xFFFF) pidRound_.faultCount++;
         faultMask_ |= LOOP_FAULT_PID_ROUND;
         liveFaultMask_ |= LOOP_FAULT_PID_ROUND;
+        eventFaultMask_ |= LOOP_FAULT_PID_ROUND;
     }
+}
+
+uint8_t LoopMonitor::consumeFaultEventMask()
+{
+    uint8_t value = eventFaultMask_;
+    eventFaultMask_ = 0;
+    return value;
 }
 
 uint16_t LoopMonitor::getAvgUs(LoopSlot slot)    { return slots_[slot].avgUs;      }

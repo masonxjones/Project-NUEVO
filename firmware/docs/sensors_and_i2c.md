@@ -64,8 +64,8 @@ This is why:
 It runs from `taskSensors()` at `100 Hz` and dispatches internal work at three
 rates:
 
-- `update100Hz()` -> IMU + Fusion AHRS
-- `update50Hz()` -> ultrasonic sensors
+- `update100Hz()` -> alternating IMU read and Fusion/ultrasonic phases
+- `update50Hz()` -> reserved medium-rate lane
 - `update10Hz()` -> voltage rails
 
 `taskSensors()` also calls `UserIO::sampleInputs()` so button and limit-switch
@@ -83,10 +83,18 @@ Implementation:
 
 - `IMUDriver` wraps the SparkFun ICM-20948 library
 - the firmware does not use the DMP path
-- `SensorManager::update100Hz()` checks `dataReady()`, reads the sensor, and
-  updates `FusionWrapper`
+- `SensorManager::update100Hz()` alternates between:
+  - a raw ICM-20948 read phase
+  - a Fusion update phase using the most recent sample
 - if magnetometer calibration is active, the fusion path is 9-DoF
 - otherwise the firmware uses 6-DoF fusion without magnetometer correction
+
+Current timing model:
+
+- blocking I2C read at an effective `50 Hz`
+- Fusion update at an effective `50 Hz` on the alternating sensor tick
+- `FusionWrapper` is initialized with `IMU_UPDATE_FREQ_HZ = 50`
+- timing reported separately in the status output as `imu`
 
 ### Ultrasonic path
 
@@ -99,8 +107,8 @@ Implementation:
 
 - ultrasonic sensors are initialized in `SensorManager::init()`
 - configured slots that do not respond are tracked as "configured but missing"
-- `update50Hz()` iterates each configured ultrasonic slot and reads the latest
-  distance from the SparkFun Qwiic ultrasonic board
+- the Fusion-phase tick iterates each configured ultrasonic slot and reads the
+  latest distance from the SparkFun Qwiic ultrasonic board
 
 Current timing model:
 
@@ -127,8 +135,22 @@ These values feed:
 
 ## 4. Magnetometer Calibration
 
-Magnetometer calibration state lives in `SensorManager`, but command flow
-starts in `MessageCenter`.
+Magnetometer calibration is now split between the Arduino and the bridge.
+
+Arduino responsibilities:
+
+- enter/leave magnetometer sampling mode
+- stream `SENSOR_MAG_CAL_STATUS`
+- keep sampling state out of ISR paths
+- apply and persist the final calibration in EEPROM
+- apply the saved correction before feeding mag data into Fusion
+
+Bridge responsibilities:
+
+- collect raw magnetometer samples during sampling mode
+- evaluate sample coverage / quality
+- fit the final hard-iron offset plus soft-iron `3×3` matrix
+- send the final result back in one `MAG_CAL_APPLY` command
 
 State machine:
 
@@ -141,12 +163,32 @@ State machine:
 Important implementation details:
 
 - sampling is updated from the IMU update path
+- `PersistentStorage::init()` must run before `SensorManager::init()` so saved
+  calibration can be loaded on boot
+- the EEPROM layout version is now `v3`; older saved mag calibration is
+  intentionally invalidated because previous builds did not serialize the
+  soft-iron matrix correctly
+- `startMagCalibration()` temporarily disables any previously active mag
+  calibration so the bridge sees raw magnetometer data
+- `cancelMagCalibration()` restores the previous active calibration, if one
+  existed
 - persistence goes through `PersistentStorage`
 - start/stop/save/apply/clear side effects are deferred out of message decode
   context
 
-So the calibration flow touches both IMU I2C and EEPROM, while still staying
-out of ISR paths.
+The firmware still tracks min/max and midpoint offsets while sampling because
+they are useful for progress reporting and for the legacy hard-iron-only save
+path. The production path, however, is:
+
+1. UI enters calibration mode and ensures the firmware is in `IDLE`
+2. bridge sends `MAG_CAL_START`
+3. user moves the robot in a figure-8 while also rotating and tilting it
+   through many orientations
+4. bridge auto-sends `MAG_CAL_APPLY` once sample coverage is good enough
+5. firmware saves the offset + matrix and returns to 9-DoF fusion
+
+So the calibration flow touches IMU I2C, EEPROM, and Fusion input correction,
+while still staying out of ISR paths.
 
 ## 5. PCA9685 Servo Controller on the Same Bus
 
@@ -191,19 +233,27 @@ Reported as:
 
 - `ultra a/b/c (...) us`
 
-This measures only the ultrasonic read loop inside `SensorManager::update50Hz()`.
+This measures only the ultrasonic read loop on the Fusion/ultrasonic phase of
+`SensorManager::update100Hz()`.
 
 The `[SENSORS]` block prints the current ultrasonic values, including slots
 that are configured but missing.
 
 ## 7. Bus Settings and Stability Notes
 
-Current bus settings are conservative on purpose:
+Current bus settings are:
 
-- `I2C_BUS_CLOCK_HZ = 100000`
+- `I2C_BUS_CLOCK_HZ = 400000`
+- `SERVO_I2C_CLOCK_HZ = 100000`
 - `I2C_WIRE_TIMEOUT_US = 5000`
 
-Those defaults prioritize recovery and shared-bus stability over raw throughput.
+The sensor task restores the sensor polling clock before each tick. This keeps
+IMU reads short enough to coexist with the loop-owned DC control compute round.
+
+The PCA9685 servo driver now explicitly forces the shared bus back to
+`SERVO_I2C_CLOCK_HZ` before runtime servo transactions. That avoids the case
+where sensor polling has already moved `Wire` to `400 kHz` and later servo
+writes inherit that fast bus speed on marginal hardware.
 
 The servo controller, IMU, and ultrasonic sensors are expected to coexist on
 that bus. If a new I2C device is added on the Arduino side, it should follow

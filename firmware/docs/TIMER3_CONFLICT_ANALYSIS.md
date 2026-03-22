@@ -17,7 +17,7 @@ That created a real hardware/software ownership conflict.
 
 The production firmware no longer treats this as an active issue.
 
-Current `v0.9.0` behavior:
+Current `v0.9.5` behavior:
 
 - Timer3 remains the stepper timer
 - the timer configuration keeps the relevant hardware PWM path available

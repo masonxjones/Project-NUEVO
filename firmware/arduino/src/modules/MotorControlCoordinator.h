@@ -25,14 +25,19 @@ public:
 
     static uint8_t getComputeSeq();
     static bool isComputeBusy();
+    static bool hasPendingRound();
 
     /**
      * @brief Run one Timer1-driven DC control slice.
      *
-     * This owns the round-robin slot index used by the 800 Hz Timer1 ISR:
-     * - slot 0 starts a new 4-motor round and publishes prepared outputs
-     * - the current motor's feedback is latched and cached output applied
-     * - the next slot index is staged for the following ISR tick
+     * Mixed round-robin control model:
+     * - the ISR services one motor slot at 800 Hz aggregate
+     * - each motor therefore gets a 200 Hz latch/apply cadence
+     * - loop() computes only one matching motor per fast-lane pass
+     * - the staged output for motor N is published the next time slot N returns
+     *
+     * This keeps the motor compute workload distributed over the full 800 Hz
+     * slot schedule instead of batching all four motors into one 5 ms loop task.
      *
      * @param motors      DC motor array owned by the main firmware
      * @param motorCount  Number of valid entries in @p motors
@@ -47,6 +52,8 @@ public:
     static void finishCompute(uint32_t requestedRound);
 
 private:
+    static constexpr uint8_t kMaxMotorSlots = 4U;
+
     static volatile uint32_t roundCount_;
     static volatile uint32_t requestedRound_;
     static volatile uint32_t computedRound_;
@@ -55,17 +62,19 @@ private:
     static volatile uint8_t isrSlot_;
     static volatile uint32_t roundStartUs_;
     static volatile uint8_t computeSeq_;
-    static volatile uint8_t preparedSeq_;
     static volatile uint8_t appliedSeq_;
     static volatile uint32_t missedRoundCount_;
     static volatile uint32_t lateComputeCount_;
     static volatile uint32_t reusedOutputCount_;
     static volatile uint32_t crossRoundComputeCount_;
-    static volatile bool roundReady_;
-    static volatile bool outputsReady_;
+    static volatile uint32_t requestedSeqBySlot_[kMaxMotorSlots];
+    static volatile uint32_t preparedSeqBySlot_[kMaxMotorSlots];
+    static volatile uint8_t pendingMask_;
     static volatile bool computeBusy_;
+    static volatile uint8_t computeSlot_;
+    static volatile uint32_t computeRequestSeq_;
 
-    static void beginPidRoundIsr(DCMotor *motors, uint8_t motorCount, bool running);
+    static void clearPendingState();
 };
 
 #endif // MOTOR_CONTROL_COORDINATOR_H

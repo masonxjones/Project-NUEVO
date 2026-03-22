@@ -110,9 +110,13 @@ public:
     static void tickPeriodic();
 
     /**
-     * @brief Poll all enabled fast tasks once in priority order.
+     * @brief Poll fast tasks in priority order until one makes progress.
      *
-     * @return True if any fast task reported progress.
+     * This keeps the fast lane work-conserving without allowing lower-priority
+     * services such as debug/status flushing to piggyback on the same loop pass
+     * as higher-priority control work.
+     *
+     * @return True if a fast task reported progress.
      */
     static bool serviceFastLane();
 

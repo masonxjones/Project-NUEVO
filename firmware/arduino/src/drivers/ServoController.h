@@ -220,6 +220,9 @@ public:
     static void clearI2CError();
 
 private:
+    static void beginBusAccess();
+    static void updateI2CHealth();
+
     // PCA9685 driver instance
     static PCA9685 pca9685_;
 

@@ -1,6 +1,6 @@
 # Firmware Architecture
 
-This document describes the current `v0.9.0` Arduino firmware as it is implemented in the codebase today. It is the top-level map for maintainers. Detailed subsystem behavior is split into focused companion documents:
+This document describes the current `v0.9.5` Arduino firmware as it is implemented in the codebase today. It is the top-level map for maintainers. Detailed subsystem behavior is split into focused companion documents:
 
 - [`communication_and_state.md`](communication_and_state.md)
 - [`motion_control.md`](motion_control.md)
@@ -72,28 +72,28 @@ Detailed implementation is pushed into modules, but the actual runtime wiring re
 
 `setup()` performs the following sequence:
 
-1. start debug serial and print the startup banner
-2. initialize the scheduler
-3. initialize `SystemManager`
-4. initialize `MessageCenter`
-5. initialize `SensorManager`
-6. initialize `UserIO`
-7. initialize `ServoController`
-8. initialize `StepperManager`
-9. initialize DC motors, encoders, and velocity estimators
-10. initialize `MotorControlCoordinator`
-11. initialize `StatusReporter`
-12. attach encoder interrupts
-13. register fast-lane tasks
-14. register periodic tasks
-15. configure Timer1 / Timer4 runtime hardware in `ISRScheduler`
-16. resynchronize output pins affected by timer setup
-17. transition `INIT -> IDLE`
-18. print the startup summary
+1. initialize `SystemManager`
+2. start debug serial and print the startup banner
+3. initialize the scheduler
+4. initialize `LoopMonitor`, `MotorControlCoordinator`, `PersistentStorage`, and `StatusReporter`
+5. initialize `MessageCenter`
+6. initialize `SensorManager`
+7. initialize `UserIO`
+8. initialize `ServoController`
+9. initialize `StepperManager`
+10. initialize DC motors, encoders, and velocity estimators
+11. attach encoder interrupts
+12. register fast-lane tasks
+13. register periodic tasks
+14. configure Timer1 / Timer4 runtime hardware in `ISRScheduler`
+15. resynchronize output pins affected by timer setup
+16. transition `INIT -> IDLE`
+17. print the startup summary
 
 This order matters because several modules depend on earlier bring-up:
 
 - `MessageCenter` expects UART and TLV buffers ready before communication starts
+- `PersistentStorage` must initialize before `SensorManager` tries to load saved magnetometer calibration
 - `SensorManager` must initialize before battery/state policy becomes meaningful
 - `ServoController` depends on the shared `Wire` bus
 - Timer1 and Timer3 interrupts are enabled only after all dependent objects are ready

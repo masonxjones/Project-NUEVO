@@ -36,6 +36,8 @@ uint16_t ServoController::channelPulseUs_[16] = {0};
 void ServoController::init() {
     if (initialized_) return;
 
+    beginBusAccess();
+
     // Do not broadcast a general-call software reset here.
     // The PCA9685 helper sends that reset to I2C address 0x00 for the entire
     // bus, which is unsafe when ultrasonic / IMU devices share Wire.
@@ -56,7 +58,8 @@ void ServoController::init() {
     // Validate that the PCA9685 is actually responding: read back a channel
     // register and verify we get 4 bytes without I2C error.
     pca9685_.getChannelPWM(0);
-    if (pca9685_.getLastI2CError() != 0) {
+    updateI2CHealth();
+    if (i2cError_) {
         i2cError_ = true;
         // Leave initialized_ = false so callers know the device is absent.
 #ifdef DEBUG_SERVO
@@ -135,6 +138,8 @@ void ServoController::setPositionUs(uint8_t channel, uint16_t pulseWidthUs) {
     if (channel >= 16) return;
     if (!initialized_) return;
 
+    beginBusAccess();
+
     // Clamp pulse width to reasonable range
     if (pulseWidthUs < 100) pulseWidthUs = 100;
     if (pulseWidthUs > 3000) pulseWidthUs = 3000;
@@ -145,10 +150,7 @@ void ServoController::setPositionUs(uint8_t channel, uint16_t pulseWidthUs) {
     // Set the channel
     pca9685_.setChannelPWM(channel, pwmValue);
 
-    // Track I2C health
-    if (pca9685_.getLastI2CError() != 0) {
-        i2cError_ = true;
-    }
+    updateI2CHealth();
 
     // Track the pulse width
     channelPulseUs_[channel] = pulseWidthUs;
@@ -180,6 +182,8 @@ void ServoController::setMultiplePositionsUs(uint8_t startChannel, uint8_t numCh
         numChannels = 16 - startChannel;
     }
 
+    beginBusAccess();
+
     // Convert all pulse widths to PWM values
     uint16_t pwmValues[16];
     for (uint8_t i = 0; i < numChannels; i++) {
@@ -193,13 +197,16 @@ void ServoController::setMultiplePositionsUs(uint8_t startChannel, uint8_t numCh
 
     // Set all channels at once
     pca9685_.setChannelsPWM(startChannel, numChannels, pwmValues);
+    updateI2CHealth();
 }
 
 void ServoController::setChannelOff(uint8_t channel) {
     if (channel >= 16) return;
     if (!initialized_) return;
 
+    beginBusAccess();
     pca9685_.setChannelOff(channel);
+    updateI2CHealth();
     channelPulseUs_[channel] = 0;
 }
 
@@ -207,7 +214,9 @@ void ServoController::setAllOff() {
     if (!initialized_) return;
 
     for (uint8_t i = 0; i < 16; i++) {
+        beginBusAccess();
         pca9685_.setChannelOff(i);
+        updateI2CHealth();
         channelPulseUs_[i] = 0;
     }
 }
@@ -234,7 +243,10 @@ uint16_t ServoController::getPositionUs(uint8_t channel) {
 uint16_t ServoController::readChannelPWM(uint8_t channel) {
     if (channel >= 16) return 0;
     if (!initialized_) return 0;
-    return pca9685_.getChannelPWM(channel);
+    beginBusAccess();
+    uint16_t value = pca9685_.getChannelPWM(channel);
+    updateI2CHealth();
+    return value;
 }
 
 byte ServoController::getLastI2CError() {
@@ -247,6 +259,14 @@ bool ServoController::hasI2CError() {
 
 void ServoController::clearI2CError() {
     i2cError_ = false;
+}
+
+void ServoController::beginBusAccess() {
+    Wire.setClock(SERVO_I2C_CLOCK_HZ);
+}
+
+void ServoController::updateI2CHealth() {
+    i2cError_ = (pca9685_.getLastI2CError() != 0);
 }
 
 // ============================================================================

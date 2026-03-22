@@ -5,7 +5,7 @@
  * This module manages all UART communication with the Raspberry Pi:
  * - Receives and parses incoming TLV messages (compact v3 wire format)
  * - Routes commands to appropriate subsystems (motors, servos, LEDs, IMU)
- * - Generates and sends outgoing telemetry at appropriate rates
+ * - Generates and sends outgoing runtime state / telemetry at appropriate rates
  * - Monitors heartbeat and enforces liveness timeout
  *
  * Message Flow:
@@ -13,9 +13,10 @@
  *   Module → Generate TLV → MessageCenter → UART → RPi
  *
  * Batched telemetry:
- *   sendTelemetry() opens a single frame, conditionally appends telemetry TLVs
+ *   sendTelemetry() opens a single frame, conditionally appends due TLVs
  *   according to the TELEMETRY_*_MS settings in config.h, then queues the
- *   completed frame for non-blocking UART drain from loop().
+ *   completed frame for non-blocking UART drain from loop(). Static/config
+ *   snapshots are returned on demand via REQ/RSP handlers.
  *
  * Safety:
  * - Liveness timeout: heartbeatValid_ goes false; SafetyManager responds on next 100 Hz check
@@ -43,14 +44,17 @@
 // Maximum TLV payload size we will accept from the RPi.
 // The compact v3 wire format uses uint8_t tlvLen, so 255 bytes is the hard cap.
 #define MAX_TLV_PAYLOAD_SIZE 255
-// RX frame storage only needs to hold the largest accepted inbound frame:
-#define RX_BUFFER_SIZE 512
-// The bridge currently sends exactly one command TLV per frame. The largest
-// supported inbound command is SERVO_SET bulk: 12-byte frame header + 2-byte
-// TLV header + 34-byte payload = 48 bytes. Keep some margin, but
-// reject implausibly large inbound frames so a corrupted length field cannot
-// hold the decoder in WaitFullFrame long enough to trip liveness.
-#define RX_MAX_FRAME_ACCEPT_SIZE 96
+// Maximum inbound frame size accepted from the RPi.
+// This should be large enough for:
+// - one maximum-size TLV payload: 12-byte frame + 2-byte TLV + 255-byte payload = 269 bytes
+// - several small/medium command TLVs bundled into one frame
+// but still bounded so a corrupted length field cannot hold the decoder in
+// WaitFullFrame for an unreasonably long time.
+#define RX_MAX_FRAME_ACCEPT_SIZE 320
+// RX decoder storage only needs to cover the largest frame we will actually
+// accept. MessageCenter::init() sets decodeDesc_.bufferSize to
+// RX_MAX_FRAME_ACCEPT_SIZE, so keeping larger backing arrays just wastes SRAM.
+#define RX_BUFFER_SIZE RX_MAX_FRAME_ACCEPT_SIZE
 // Keep RUNNING telemetry frames small enough that one frame does not occupy the
 // UART for an entire 20 ms task period. Large multi-TLV bursts were driving the
 // queued TX length near 500 bytes and correlating with heartbeat loss.
@@ -177,7 +181,7 @@ public:
      *
      * Called by SafetyManager BEFORE forceState(ERROR) so the cause is not lost
      * when the state transitions away from RUNNING/IDLE.  The latched flags are
-     * OR'd into every subsequent SYS_STATUS errorFlags field until CMD_RESET clears
+     * OR'd into every subsequent SYS_STATE / SYS_DIAG fault view until CMD_RESET clears
      * them.  Safe to call from ISR context (volatile write, no heap alloc).
      *
      * @param flags  SystemErrorFlags bitmask describing the triggering fault(s)
@@ -193,7 +197,7 @@ public:
      * @brief Record UART task wall-clock time for diagnostic display
      *
      * Maintains exponential moving average and per-window max.
-     * Values are reported in SYS_STATUS (loopTimeAvgUs / loopTimeMaxUs).
+     * Values are reported in SYS_DIAG_RSP.
      *
      * NOTE: elapsedUs is measured with micros() in loop() while interrupts are
      * enabled — it includes ISR preemption time (Timer1 PID, Timer3 stepper).
@@ -204,7 +208,7 @@ public:
      */
     static void recordLoopTime(uint32_t elapsedUs);
 
-    // ---- Diagnostic accessors (for debug serial / SYS_STATUS) ----
+    // ---- Diagnostic accessors (for debug serial / SYS_DIAG_RSP) ----
     static uint16_t getLoopTimeAvgUs()  { return loopTimeAvgUs_; }
     static uint16_t getLoopTimeMaxUs()  { return loopTimeMaxUs_; }
     static uint16_t getUartRxErrors()   { return uartRxErrors_; }
@@ -248,11 +252,11 @@ private:
 
     // ---- Fault latch (cleared only by CMD_RESET) ----
     // Captures the error flags that triggered the current ERROR state so they
-    // remain visible in SYS_STATUS even after the state has already changed to ERROR
+    // remain visible in SYS_STATE even after the state has already changed to ERROR
     // (at which point live flag conditions may no longer evaluate true).
     static volatile uint8_t faultLatchFlags_;
 
-    // ---- Configuration (from SYS_CONFIG) ----
+    // ---- Mutable runtime configuration (from SYS_CONFIG_SET) ----
     static uint8_t motorDirMask_;  // Direction inversion bitmask
     static uint8_t neoPixelCount_; // Configured NeoPixel count
 
@@ -277,16 +281,17 @@ private:
     static uint16_t txFramesWindow_;
 
     // ---- Telemetry timing ----
-    static uint32_t lastDCStatusSendMs_;
-    static uint32_t lastStepStatusSendMs_;
-    static uint32_t lastServoStatusSendMs_;
+    static uint32_t lastDCStateSendMs_;
+    static uint32_t lastStepStateSendMs_;
+    static uint32_t lastServoStateSendMs_;
     static uint32_t lastIMUSendMs_;
     static uint32_t lastKinematicsSendMs_;
-    static uint32_t lastVoltageSendMs_;
-    static uint32_t lastIOStatusSendMs_;
-    static uint32_t lastStatusSendMs_;
+    static uint32_t lastSysPowerSendMs_;
+    static uint32_t lastIOInputStateSendMs_;
+    static uint32_t lastIOOutputStateSendMs_;
+    static uint32_t lastSysStateSendMs_;
     static uint32_t lastMagCalSendMs_;
-    static uint32_t lastUltrasonicSendMs_;
+    static uint32_t lastUltrasonicAllSendMs_;
 
     // ---- Queued async response ----
     // Set by handleMagCalCmd on STOP/SAVE/APPLY/CLEAR so the response is
@@ -295,6 +300,12 @@ private:
     static bool pendingMagCal_;
     static bool pendingServoStatus_;
     static bool pendingDCStatus_;
+    static bool pendingSysInfoRsp_;
+    static bool pendingSysConfigRsp_;
+    static bool pendingSysDiagRsp_;
+    static uint8_t pendingDCPidRspMask_;
+    static uint8_t pendingStepConfigRspMask_;
+    static bool pendingIOOutputState_;
 
     // ---- Deferred servo side effects ----
     static bool servoHardwareDirty_;
@@ -317,6 +328,7 @@ private:
     static float deferredMagCalOffsetX_;
     static float deferredMagCalOffsetY_;
     static float deferredMagCalOffsetZ_;
+    static float deferredMagCalMatrix_[9];
 
     // ---- Initialization flag ----
     static bool initialized_;
@@ -374,8 +386,11 @@ private:
     // ---- System message handlers ----
     static void handleHeartbeat(const PayloadHeartbeat *payload);
     static void handleSysCmd(const PayloadSysCmd *payload);
-    static void handleSysConfig(const PayloadSysConfig *payload);
-    static void handleSetPID(const PayloadSetPID *payload);
+    static void handleSysInfoReq(const PayloadSysInfoReq *payload);
+    static void handleSysConfigReq(const PayloadSysConfigReq *payload);
+    static void handleSysConfigSet(const PayloadSysConfigSet *payload);
+    static void handleSysDiagReq(const PayloadSysDiagReq *payload);
+    static void handleSysOdomReset(const PayloadSysOdomReset *payload);
 
     // ---- DC motor message handlers ----
     static void handleDCEnable(const PayloadDCEnable *payload);
@@ -384,8 +399,11 @@ private:
     static void handleDCSetPWM(const PayloadDCSetPWM *payload);
 
     // ---- Stepper motor message handlers ----
+    static void handleDCPidReq(const PayloadDCPidReq *payload);
+    static void handleDCPidSet(const PayloadDCPidSet *payload);
     static void handleStepEnable(const PayloadStepEnable *payload);
-    static void handleStepSetParams(const PayloadStepSetParams *payload);
+    static void handleStepConfigReq(const PayloadStepConfigReq *payload);
+    static void handleStepConfigSet(const PayloadStepConfigSet *payload);
     static void handleStepMove(const PayloadStepMove *payload);
     static void handleStepHome(const PayloadStepHome *payload);
 
@@ -411,14 +429,14 @@ private:
     // Each method appends one TLV to the current frame buffer.
     // Must be called between beginFrame() and sendFrame().
 
-    /** @brief Append all DC motor status (184 bytes payload) */
-    static void sendDCStatusAll();
+    /** @brief Append all DC motor runtime state */
+    static void sendDCStateAll();
 
-    /** @brief Append all stepper motor status (96 bytes payload) */
-    static void sendStepStatusAll();
+    /** @brief Append all stepper motor runtime state */
+    static void sendStepStateAll();
 
-    /** @brief Append servo status for all 16 channels (36 bytes payload) */
-    static void sendServoStatusAll();
+    /** @brief Append servo runtime state for all channels */
+    static void sendServoStateAll();
 
     /** @brief Append IMU quaternion and raw sensor data (52 bytes payload) */
     static void sendSensorIMU();
@@ -426,27 +444,38 @@ private:
     /** @brief Append wheel odometry kinematics (28 bytes payload) */
     static void sendSensorKinematics();
 
-    /** @brief Append battery and rail voltages (8 bytes payload) */
-    static void sendVoltageData();
+    /** @brief Append live system state */
+    static void sendSysState();
 
-    /** @brief Append button/limit states and NeoPixel RGB (variable payload) */
-    static void sendIOStatus();
+    /** @brief Append live system power rails */
+    static void sendSysPower();
 
-    /** @brief Append system state, version, and diagnostics (40 bytes payload) */
-    static void sendSystemStatus();
+    /** @brief Append static firmware/board capabilities in response to SYS_INFO_REQ */
+    static void sendSysInfoRsp();
+
+    /** @brief Append mutable runtime configuration in response to SYS_CONFIG_REQ */
+    static void sendSysConfigRsp();
+
+    /** @brief Append engineering diagnostics in response to SYS_DIAG_REQ */
+    static void sendSysDiagRsp();
+
+    /** @brief Append button and limit switch input state */
+    static void sendIOInputState();
+
+    /** @brief Append LED and NeoPixel output state */
+    static void sendIOOutputState();
 
     /** @brief Append magnetometer calibration progress (44 bytes payload) */
     static void sendMagCalStatus();
 
-    /**
-     * @brief Append SENSOR_RANGE packets for all configured ultrasonic sensors.
-     *
-     * For sensors that responded during init: sends the latest distance reading
-     * (status = 0, valid).
-     * For sensors configured in config.h but absent on the I2C bus:
-     * sends status = 3 (not installed) so the RPi can notify the user.
-     */
-    static void sendUltrasonicRange();
+    /** @brief Append bundled ultrasonic state for all configured slots */
+    static void sendUltrasonicAll();
+
+    /** @brief Append DC PID loop configuration in response to DC_PID_REQ */
+    static void sendDCPidRsp(uint8_t motorId, uint8_t loopType);
+
+    /** @brief Append stepper motion configuration in response to STEP_CONFIG_REQ */
+    static void sendStepConfigRsp(uint8_t stepperId);
 
     // ========================================================================
     // HELPERS
