@@ -26,14 +26,14 @@ A modular two-wheeled mobile robot platform designed for hands-on robotics educa
 ## Repository Structure
 
 ```
-├── firmware/      Arduino firmware (.ino files)
-├── ros2_ws/       ROS2 workspace
-├── TLV protocol/  TLV type definitions used for both Arduino and ROS2 communication
-├── NUEVO board/   PCB design files (schematics, layouts, BOM)
-├── mechanical/    CAD files for chassis and manipulators
-├── NUEVO UI/      User interface code (if applicable)
-├── notes/         Notes and documentation for development
-└── docs/          Documentation and reports
+├── firmware/       Arduino firmware and firmware-specific docs
+├── nuevo_ui/       Raspberry Pi bridge + web UI
+├── ros2_ws/        ROS2 workspace and Pi-side tests
+├── tlv_protocol/   TLV type definitions, payload schemas, generators
+├── NUEVO board/    PCB design files (schematics, layouts, BOM)
+├── mechanical/     CAD files for chassis and manipulators
+├── docs/           Cross-project architecture, protocol, and design docs
+└── assets/         Shared repo assets
 ```
 
 
@@ -43,8 +43,10 @@ A modular two-wheeled mobile robot platform designed for hands-on robotics educa
 
 | Document | Purpose |
 |----------|---------|
-| [DESIGN_GUIDELINES.md](DESIGN_GUIDELINES.md) | Cross-project conventions: numbering, naming, units, coordinate system, workflow |
-| [COMMUNICATION_PROTOCOL.md](COMMUNICATION_PROTOCOL.md) | TLV v2.0 wire protocol specification |
+| [docs/COMMUNICATION_PROTOCOL.md](docs/COMMUNICATION_PROTOCOL.md) | Current human-readable source of truth for protocol behavior, framing, and logical TLV design |
+| [docs/TLV_MODIFY_PLAN.md](docs/TLV_MODIFY_PLAN.md) | Planned TLV redesign notes and message cleanup goals |
+| [docs/DESIGN_GUIDELINES.md](docs/DESIGN_GUIDELINES.md) | Cross-project conventions and protocol update workflow |
+| [tlv_protocol/TLV_Payloads.md](tlv_protocol/TLV_Payloads.md) | Exact payload layouts and sizes |
 | [firmware/README.md](firmware/README.md) | Arduino firmware architecture, build instructions |
 | [NUEVO board/SPECIFICATIONS.md](NUEVO%20board/SPECIFICATIONS.md) | PCB hardware specifications |
 
@@ -55,4 +57,3 @@ A modular two-wheeled mobile robot platform designed for hands-on robotics educa
 - **Communication**: UART serial protocol
 - **Sensors**: Camera, GPS, encoders
 - **Hardware**: Custom PCB, stepper/servo motors
-
