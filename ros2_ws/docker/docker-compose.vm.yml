@@ -35,12 +35,15 @@ services:
       - ../../ros2_ws/src:/ros2_ws/src:ro
       # Shared Python bridge runtime used by the ROS wrapper package.
       - ../../nuevo_ui/backend:/workspace/nuevo_bridge_source:ro
+      # Writable runtime data for auth/users and future bridge state.
+      - ros2_runtime_data:/data
       # colcon build cache — only slow on first run. Wipe with: docker compose down -v
       - ros2_build:/ros2_ws/build
       - ros2_install:/ros2_ws/install
 
     environment:
       - NUEVO_BRIDGE_SOURCE=/workspace/nuevo_bridge_source
+      - NUEVO_USERS_FILE=/data/users.json
       - NUEVO_MOCK=1
       - NUEVO_MOCK_ODOMETRY=1
 
@@ -54,5 +57,6 @@ services:
       start_period: 90s   # allow time for first-run colcon build
 
 volumes:
+  ros2_runtime_data:
   ros2_build:
   ros2_install:

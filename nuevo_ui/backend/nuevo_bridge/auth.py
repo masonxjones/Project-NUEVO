@@ -1,13 +1,15 @@
 """
 Authentication helpers for NUEVO Bridge.
 
-- Users stored in backend/users.json (ignored by git).
+- Users stored in a JSON file. By default this is backend/users.json, but it can
+  be overridden with NUEVO_USERS_FILE for Docker/runtime deployments.
 - Passwords hashed with bcrypt via passlib.
 - JWT tokens signed with a random secret (per-process).
   Users must re-login after RPi reboot — this is intentional and acceptable.
 - Default accounts (admin / user) are created automatically on first boot.
 """
 import json
+import os
 import secrets
 from pathlib import Path
 
@@ -17,8 +19,11 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-# users.json lives at backend/users.json (parent of the nuevo_bridge package dir)
-USERS_FILE = Path(__file__).parent.parent / "users.json"
+# users.json defaults to backend/users.json (parent of the nuevo_bridge package
+# dir), but Docker deployments should override it with NUEVO_USERS_FILE so auth
+# data lives outside the read-only source tree.
+DEFAULT_USERS_FILE = Path(__file__).parent.parent / "users.json"
+USERS_FILE = Path(os.getenv("NUEVO_USERS_FILE", str(DEFAULT_USERS_FILE)))
 
 # ─── Password hashing (bcrypt directly — avoids passlib compatibility issues) ─
 
