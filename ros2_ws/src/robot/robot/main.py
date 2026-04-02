@@ -27,7 +27,7 @@ class LED:
     GREEN  = 1   # Discrete green LED  (PWM)
     BLUE   = 2   # Discrete blue LED   (PWM)
     ORANGE = 3   # Discrete orange LED (PWM)
-    PURPLE = 4   # Discrete purple LED (non-PWM — brightness is 0 or 255 only)
+    PURPLE = 4   # Discrete purple LED (PWM)
 
     OFF = 0      # Brightness: off
     ON  = 255    # Brightness: full on
@@ -123,7 +123,7 @@ class MyFSM(RobotFSM):
 
     def _on_to_moving(self) -> None:
         """Called once when entering MOVING."""
-        self.robot.set_velocity(linear=100, angular=0.0)  # 100 mm/s forward
+        self.robot.set_velocity(100, 0.0)  # 100 mm/s forward, 0 deg/s rotation
 
     def _on_to_idle(self) -> None:
         """Called once when entering IDLE from MOVING."""
