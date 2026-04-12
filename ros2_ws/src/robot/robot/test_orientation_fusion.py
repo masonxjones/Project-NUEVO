@@ -181,9 +181,10 @@ def _drive_circle(robot: Robot, rec: _Record) -> None:
 def _plot_results(rec: _Record) -> None:
     t, x, y, odom_deg, fused_deg = rec.arrays()
 
-    correction = fused_deg - odom_deg
-    # Wrap correction to [-180, 180]
-    correction = (correction + 180.0) % 360.0 - 180.0
+    # Unwrap both heading traces before differencing so the correction is
+    # continuous even when either trace crosses the ±180° boundary.
+    correction = np.degrees(np.unwrap(np.radians(fused_deg))) \
+               - np.degrees(np.unwrap(np.radians(odom_deg)))
 
     try:
         import matplotlib
