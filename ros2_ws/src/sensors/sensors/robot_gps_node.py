@@ -56,9 +56,11 @@ class RobotGpsNode(Node):
 
         self.declare_parameter("jetson_ip", "192.168.8.120")
         self.declare_parameter("jetson_port", 7777)
+        self.declare_parameter("tracked_tag_id", -1)
 
         self._jetson_ip: str = self.get_parameter("jetson_ip").value
         self._jetson_port: int = int(self.get_parameter("jetson_port").value)
+        self._tracked_tag_id: int = int(self.get_parameter("tracked_tag_id").value)
 
         self._pub = self.create_publisher(
             TagDetectionArray,
@@ -66,9 +68,11 @@ class RobotGpsNode(Node):
             _RELIABLE_QOS,
         )
 
+        tag_desc = str(self._tracked_tag_id) if self._tracked_tag_id != -1 else "any"
         self.get_logger().info(
             f"Robot GPS node started. "
-            f"Connecting to Jetson at {self._jetson_ip}:{self._jetson_port}"
+            f"Connecting to Jetson at {self._jetson_ip}:{self._jetson_port} "
+            f"(tracked_tag_id={tag_desc})"
         )
 
         self._recv_thread = threading.Thread(
@@ -131,8 +135,11 @@ class RobotGpsNode(Node):
         msg.header.frame_id = "world"
 
         for det in data.get("detections", []):
+            tid = int(det["tag_id"])
+            if self._tracked_tag_id != -1 and tid != self._tracked_tag_id:
+                continue
             d = TagDetection()
-            d.tag_id = int(det["tag_id"])
+            d.tag_id = tid
             d.x = float(det["x"])
             d.y = float(det["y"])
             d.theta = float(det["theta"])

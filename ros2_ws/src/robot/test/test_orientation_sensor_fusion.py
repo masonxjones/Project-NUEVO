@@ -39,13 +39,15 @@ def _install_fake_robot_dependencies() -> None:
     bridge_interfaces_srv = types.ModuleType("bridge_interfaces.srv")
 
     for name in [
-        "DCEnable", "DCHome", "DCPidReq", "DCPidSet", "DCResetPosition",
+        "DCEnable", "DCHome", "DCPid", "DCPidReq", "DCPidSet", "DCResetPosition",
         "DCSetPosition", "DCSetPwm", "DCSetVelocity", "DCStateAll",
-        "IOInputState", "IOSetLed", "IOSetNeopixel", "SensorImu",
+        "IOInputState", "IOOutputState", "IOSetLed", "IOSetNeopixel", "SensorImu",
         "SensorKinematics", "ServoEnable", "ServoSet", "ServoStateAll",
-        "StepConfigSet", "StepEnable", "StepHome", "StepMove", "StepStateAll",
+        "StepConfig", "StepConfigReq", "StepConfigSet", "StepEnable", "StepHome",
+        "StepMove", "StepStateAll",
         "SysOdomParamReq", "SysOdomParamRsp", "SysOdomParamSet",
-        "SysOdomReset", "SystemPower", "SystemState",
+        "SysOdomReset", "SystemConfig", "SystemDiag", "SystemInfo",
+        "SystemPower", "SystemState", "TagDetectionArray",
     ]:
         setattr(bridge_interfaces_msg, name, type(name, (), {}))
 
@@ -106,6 +108,15 @@ def _make_imu(module, *, mag_calibrated: bool, mag_x: float, mag_y: float):
     msg.mag_calibrated = mag_calibrated
     msg.mag_x = mag_x
     msg.mag_y = mag_y
+    # robot._on_imu now extracts heading from the Madgwick quaternion rather
+    # than raw atan2(mag_y, mag_x).  Build a flat-robot (roll=pitch=0)
+    # quaternion whose yaw matches the heading implied by the mag vector so
+    # that all existing test expectations remain valid.
+    yaw = math.atan2(mag_y, mag_x)
+    msg.quat_w = math.cos(yaw / 2.0)
+    msg.quat_x = 0.0
+    msg.quat_y = 0.0
+    msg.quat_z = math.sin(yaw / 2.0)
     return msg
 
 
@@ -124,7 +135,7 @@ def _make_kin(module, *, theta: float, x: float = 0.0, y: float = 0.0):
 # Tests
 # ---------------------------------------------------------------------------
 
-class SensorFusionTests(unittest.TestCase):
+class OrientationSensorFusionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         _install_fake_robot_dependencies()
@@ -332,26 +343,32 @@ class SensorFusionTests(unittest.TestCase):
         self.assertAlmostEqual(self.robot.get_fused_orientation(), 90.0, places=6)
 
     def test_recalibration_replaces_stale_mag_heading(self) -> None:
-        # Calibrated → uncalibrated (drops mag) → recalibrated with new heading.
+        # Calibrated (east, 0°) → calibration lost → recalibrated (north, 90°).
+        # While uncalibrated the system must fall back to pure odometry, not
+        # continue blending against the last valid heading.
+        # Using odom=60° during the uncalibrated phase so the two behaviors
+        # produce distinct values:
+        #   buggy  (stale heading kept): fused = 60 + 0.5*(0−60) = 30°
+        #   correct (heading cleared):   fused = 60° (pure odometry)
         self.robot.set_fusion_alpha(0.5)
 
+        # Phase 1: calibrated, mag = east (0°), odom = 0° → fused = 0°.
         self.robot._on_imu(_make_imu(self.mod, mag_calibrated=True, mag_x=1.0, mag_y=0.0))
         self.robot._on_kinematics(_make_kin(self.mod, theta=0.0))
-        after_first_cal = self.robot.get_fused_orientation()
-        self.assertAlmostEqual(after_first_cal, 0.0, places=5)
-
-        # Uncalibrated: _mag_heading should NOT be updated.
-        self.robot._on_imu(_make_imu(self.mod, mag_calibrated=False, mag_x=0.0, mag_y=1.0))
-        # Kinematics still uses the old mag heading.
-        self.robot._on_kinematics(_make_kin(self.mod, theta=0.0))
-        # Still using the old east (0°) heading.
         self.assertAlmostEqual(self.robot.get_fused_orientation(), 0.0, places=5)
 
-        # Now recalibrate pointing north.
+        # Phase 2: calibration lost.  _mag_heading must be cleared so the
+        # filter falls back to pure odometry even though odom drifted to 60°.
+        self.robot._on_imu(_make_imu(self.mod, mag_calibrated=False, mag_x=0.0, mag_y=1.0))
+        self.robot._on_kinematics(_make_kin(self.mod, theta=math.radians(60.0)))
+        # Pure odometry: fused must equal the odometry input exactly.
+        self.assertAlmostEqual(self.robot.get_fused_orientation(), 60.0, places=5)
+
+        # Phase 3: recalibrated pointing north (90°), odom still 60°.
+        # alpha=0.5 → fused = 60 + 0.5*(90−60) = 75°.
         self.robot._on_imu(_make_imu(self.mod, mag_calibrated=True, mag_x=0.0, mag_y=1.0))
-        self.robot._on_kinematics(_make_kin(self.mod, theta=0.0))
-        # alpha=0.5 → fused = 0 + 0.5 * (π/2) ≈ 45°
-        self.assertAlmostEqual(self.robot.get_fused_orientation(), 45.0, places=5)
+        self.robot._on_kinematics(_make_kin(self.mod, theta=math.radians(60.0)))
+        self.assertAlmostEqual(self.robot.get_fused_orientation(), 75.0, places=5)
 
     def test_kinematics_callback_sets_pose_event(self) -> None:
         # _on_kinematics must pulse the pose_event so wait_for_pose_update() works.
@@ -366,7 +383,10 @@ class SensorFusionTests(unittest.TestCase):
     # get_pose() returns raw odometry, NOT fused heading
     # ------------------------------------------------------------------
 
-    def test_get_pose_theta_is_raw_odometry_not_fused(self) -> None:
+    def test_get_pose_theta_matches_fused_orientation(self) -> None:
+        # get_pose() theta and get_fused_orientation() must always agree —
+        # both expose the sensor-fused heading so navigation benefits from
+        # AHRS correction without extra API calls.
         self.robot.set_fusion_alpha(0.5)
         odom_theta = math.radians(20.0)
         self.robot._on_imu(_make_imu(self.mod, mag_calibrated=True, mag_x=0.0, mag_y=1.0))
@@ -375,10 +395,10 @@ class SensorFusionTests(unittest.TestCase):
         _, _, pose_theta_deg = self.robot.get_pose()
         fused_deg = self.robot.get_fused_orientation()
 
-        # The raw pose theta must equal the odometry input exactly.
-        self.assertAlmostEqual(pose_theta_deg, math.degrees(odom_theta), places=6)
-        # And the fused value must differ (mag pulls it toward 90°).
-        self.assertNotAlmostEqual(pose_theta_deg, fused_deg, places=2)
+        # Both must return the same fused heading.
+        self.assertAlmostEqual(pose_theta_deg, fused_deg, places=6)
+        # And it must differ from the raw odometry (mag pulled it toward 90°).
+        self.assertNotAlmostEqual(pose_theta_deg, math.degrees(odom_theta), places=2)
 
     # ------------------------------------------------------------------
     # Alpha clamping
@@ -417,7 +437,7 @@ class SensorFusionTests(unittest.TestCase):
 # AdaptiveComplementaryFilter unit tests
 # ===========================================================================
 
-class AdaptiveComplementaryFilterTests(unittest.TestCase):
+class OrientationAdaptiveComplementaryFilterTests(unittest.TestCase):
     """Tests for velocity-dependent alpha blending."""
 
     def test_at_rest_uses_alpha_max(self) -> None:
@@ -486,7 +506,12 @@ class AdaptiveComplementaryFilterTests(unittest.TestCase):
         imu = mod.SensorImu()
         imu.mag_calibrated = True
         imu.mag_x = 0.0
-        imu.mag_y = 1.0   # mag heading = π/2
+        imu.mag_y = 1.0   # heading = π/2
+        yaw = math.atan2(1.0, 0.0)  # π/2
+        imu.quat_w = math.cos(yaw / 2.0)
+        imu.quat_x = 0.0
+        imu.quat_y = 0.0
+        imu.quat_z = math.sin(yaw / 2.0)
         robot._on_imu(imu)
 
         kin = mod.SensorKinematics()
@@ -612,7 +637,12 @@ class HeadingKalmanFilterTests(unittest.TestCase):
 
         imu = mod.SensorImu()
         imu.mag_calibrated = True
-        imu.mag_x = 0.0; imu.mag_y = 1.0   # π/2
+        imu.mag_x = 0.0; imu.mag_y = 1.0   # heading = π/2
+        yaw = math.atan2(1.0, 0.0)  # π/2
+        imu.quat_w = math.cos(yaw / 2.0)
+        imu.quat_x = 0.0
+        imu.quat_y = 0.0
+        imu.quat_z = math.sin(yaw / 2.0)
         robot._on_imu(imu)
 
         kin = mod.SensorKinematics()
@@ -651,6 +681,11 @@ def _drive_robot(mod, node, *, imu_mag_x, imu_mag_y, mag_calibrated,
     imu.mag_calibrated = mag_calibrated
     imu.mag_x = imu_mag_x
     imu.mag_y = imu_mag_y
+    yaw = math.atan2(imu_mag_y, imu_mag_x)
+    imu.quat_w = math.cos(yaw / 2.0)
+    imu.quat_x = 0.0
+    imu.quat_y = 0.0
+    imu.quat_z = math.sin(yaw / 2.0)
     robot._on_imu(imu)
     if strategy is not None:
         robot.set_fusion_strategy(strategy)
@@ -721,43 +756,51 @@ class FusedPurePursuitTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_fused_heading_changes_steering_command(self) -> None:
-        # Odom: 0° (east).  Mag: 90° (north) with alpha=1 → fused = 90°.
-        # Waypoint is north.  Facing north needs no turn; facing east needs
-        # a large left turn.  Commands must differ.
-        robot = _drive_robot(
+        # Robot A: uncalibrated mag → fused == odom == 0° (east).
+        # Robot B: calibrated mag, alpha=1 → fused == 90° (north).
+        # Waypoint is north.  Robot A needs a large left turn; Robot B is aligned.
+        robot_no_fusion = _drive_robot(
             self.mod, self.node,
+            imu_mag_x=0.0, imu_mag_y=1.0, mag_calibrated=False,
+            odom_theta=0.0,
+        )
+        _, ang_no_fusion = self._velocity_from_fused(robot_no_fusion)
+
+        robot_fused = _drive_robot(
+            self.mod, FakeNode(),
             imu_mag_x=0.0, imu_mag_y=1.0, mag_calibrated=True,
             odom_theta=0.0,
         )
-        robot.set_fusion_alpha(1.0)   # ComplementaryFilter: full mag trust
-        robot._on_kinematics(          # re-deliver kin so fusion recalculates
-            _make_kin(self.mod, theta=0.0)
-        )
+        robot_fused.set_fusion_alpha(1.0)
+        robot_fused._on_kinematics(_make_kin(self.mod, theta=0.0))
+        _, ang_fused = self._velocity_from_fused(robot_fused)
 
-        _, ang_fused = self._velocity_from_fused(robot)
-        _, ang_raw = self._velocity_from_raw_odom(robot)
-
-        # Fused heading (90°) is aligned with waypoint → near-zero angular.
-        # Raw odom heading (0°) is perpendicular → large positive angular.
-        self.assertLess(abs(ang_fused), abs(ang_raw))
+        # Fused (90°) is aligned with north waypoint → near-zero angular.
+        # No-fusion (0°) is perpendicular → large positive angular.
+        self.assertLess(abs(ang_fused), abs(ang_no_fusion))
 
     def test_fused_heading_turns_correct_direction(self) -> None:
-        # Odom: 0° (east).  Mag: 90° (north).  Waypoint north.
-        # Robot using raw odom thinks it faces east → must turn left (positive ω).
-        # Robot using fused heading knows it faces north → no turn needed.
-        robot = _drive_robot(
+        # Uncalibrated robot (fused == odom == 0°, east) facing north waypoint
+        # → must turn left (positive ω).
+        # Calibrated robot (fused == 90°, north) already aligned → no turn.
+        robot_no_fusion = _drive_robot(
             self.mod, self.node,
+            imu_mag_x=0.0, imu_mag_y=1.0, mag_calibrated=False,
+            odom_theta=0.0,
+        )
+        _, ang_no_fusion = self._velocity_from_fused(robot_no_fusion)
+
+        robot_fused = _drive_robot(
+            self.mod, FakeNode(),
             imu_mag_x=0.0, imu_mag_y=1.0, mag_calibrated=True,
             odom_theta=0.0,
         )
-        robot.set_fusion_alpha(1.0)
-        robot._on_kinematics(_make_kin(self.mod, theta=0.0))
+        robot_fused.set_fusion_alpha(1.0)
+        robot_fused._on_kinematics(_make_kin(self.mod, theta=0.0))
+        _, ang_fused = self._velocity_from_fused(robot_fused)
 
-        _, ang_fused = self._velocity_from_fused(robot)
-        _, ang_raw = self._velocity_from_raw_odom(robot)
-
-        self.assertGreater(ang_raw, 0.0)           # raw: turn left toward north
-        self.assertAlmostEqual(ang_fused, 0.0, places=3)  # fused: already north
+        self.assertGreater(ang_no_fusion, 0.0)              # uncalibrated: turn left toward north
+        self.assertAlmostEqual(ang_fused, 0.0, places=3)   # fused: already north
 
     # ------------------------------------------------------------------
     # 3. ComplementaryFilter alpha scales the steering correction

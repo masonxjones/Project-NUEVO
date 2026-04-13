@@ -9,6 +9,7 @@
 .local/
 openspec/
 CLAUDE.md
+AGENTS.md
 
 # ============================================
 # ROS2 Workspace
@@ -196,6 +197,11 @@ get-docker.sh
 # Compressed files (keep intentional archives, ignore temp)
 *.zip.tmp
 *.tar.gz.tmp
+
+# ============================================
+# Lab Documentation (generated/student-facing, not tracked)
+# ============================================
+ros2_ws/src/lab_docs/
 
 # ============================================
 # Project Specific
