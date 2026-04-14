@@ -191,6 +191,10 @@ class DWAPlanner():
                 self.current_index = i
                 return path[i]
 
+        # All remaining path points are within lookahead distance — robot is at
+        # or past the final waypoint.  Advance current_index to the last point so
+        # TargetReached() (which requires current_index == len(path)-1) can fire.
+        self.current_index = len(path) - 1
         return path[-1]
 
     def TargetReached(self, path, x, y):
@@ -212,6 +216,10 @@ class DWAPlanner():
     
     def motion(self, pose, v, w, dt):
         x, y, theta = pose
+        # NOTE: position uses self.dt but theta uses the dt parameter.  They are
+        # always equal in practice because compute_velocity sets self.dt = dt
+        # before calling predict_trajectory, but the inconsistency is a latent
+        # bug if motion() is ever called independently with a different dt.
         pose[0] += v * np.cos(theta) * self.dt
         pose[1] += v * np.sin(theta) * self.dt
         pose[2] += w * dt
@@ -288,24 +296,26 @@ class DWAPlanner():
     #         return 1.0
 
     def pure_velocity_search(self, pose, obstacles):
-        # NOTE (self-detection fallback): this function is called when every DWA
-        # trajectory has infinite cost (robot appears to be stuck).  However, it
-        # receives the same already-world-frame-transformed obstacles as compute_velocity.
-        # If self-body lidar readings (e.g. from range == 0 or chassis reflections)
-        # survived the forward filter and are within robot_radius of the robot,
-        # calc_obstacle_cost will return inf for every trajectory here too, and
-        # best_u_when_blocked stays [0., 0.] — the robot stops instead of recovering.
-        # The root fix is filtering zero-range and below-range_min readings in
-        # _on_lidar before they ever reach the planner.
+        # Called when every DWA trajectory within the dynamic window has infinite
+        # cost (robot is fully blocked).  Searches the full ±v_max velocity space
+        # for the safest trajectory that is actually collision-free, then returns
+        # it.  If no collision-free trajectory exists (robot is completely boxed in),
+        # returns [0., 0.] so the robot stops in place.
+        #
+        # Safety gate: use obs_cost != inf rather than a min_dist threshold.
+        # calc_obstacle_cost returns min_dist in mm on the early-return collision
+        # path but in metres on the normal return path — comparing either value
+        # to robot_radius (mm) gives wrong results.  obs_cost == inf is the
+        # unambiguous collision flag regardless of units.
         best_u_when_blocked = [0., 0.]
         best_min_dist = 0.
 
-        for v in np.arange(-self.v_max, self.v_max+self.sample_rx[0], self.sample_rx[0]): # evaluate a set of linear velocity samples within the dynamic window
+        for v in np.arange(-self.v_max, self.v_max+self.sample_rx[0], self.sample_rx[0]):
             for w in np.arange(-self.w_max, self.w_max+self.sample_rx[1], self.sample_rx[1]):
                 traj = self.predict_trajectory(pose, np.array([v,0,w]))
                 obs_cost, min_dist = self.calc_obstacle_cost(traj, obstacles)
-                # find the best orientation with largest minimal distance with obstacles, we'll use it when the vehicle is blocked by obstacles.
-                if min_dist > best_min_dist:
+                # Only accept trajectories with no collision along the full horizon.
+                if obs_cost != float('inf') and min_dist > best_min_dist:
                     best_min_dist = min_dist
                     best_u_when_blocked = [v, w]
 
@@ -375,11 +385,16 @@ class DWAPlanner():
 
         best_v, best_w = best_u
         # print(f"Best cost: {best_cost:.4f}")
-        if best_cost == float('inf') or (abs(best_v) < (0.01 * 1000) and abs(best_w) < 0.05):
-            # return best_u_when_blocked[0], best_u_when_blocked[1]   # rotate in place
-            return self.pure_velocity_search(pose, obstacles)   # rotate in place
-        
-        return  best_v, best_w
+        # Only fall back to pure_velocity_search when every trajectory in the
+        # dynamic window collides (best_cost == inf).  The previous condition
+        # also triggered on abs(best_v) < 10 and abs(best_w) < 0.05, which fired
+        # when the DWA correctly chose to slow to near-zero in front of an obstacle
+        # — overriding the legitimate stop with a full-space search that almost
+        # always returned a non-zero velocity and drove the robot into the obstacle.
+        if best_cost == float('inf'):
+            return self.pure_velocity_search(pose, obstacles)
+
+        return best_v, best_w
 
 
 # =============================================================================
