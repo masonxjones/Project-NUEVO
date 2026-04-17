@@ -86,18 +86,18 @@ def run(robot: Robot) -> None:
             ]
             path = np.float64(densify_polyline(path_control_points, spacing=500.0))
             robot._nav_follow_dwa_path(
-                max_vel_mm=300.0,
-                max_acc_mm=600.0,
-                max_angular_rad=3.0,
-                max_angular_acc_rad=5.0,
-                lookahead_mm=300.0,
+                max_vel_mm=200.0,
+                max_acc_mm=300.0,
+                max_angular_rad=1.0,
+                max_angular_acc_rad=2.0,
+                lookahead_mm=200.0,
                 advance_radius_mm=150.0,
                 tolerance_mm=100.0,
-                gains_of_costs=[2.0, 0.1, 0.5, 3.0, 0.2], # [gain_goal, gain_heading, gain_obs_base, gain_speed, gain_path]
+                gains_of_costs=[2.0, 0.02, 0.2, 0.5, 0.1], # [gain_goal, gain_heading, gain_obs_base, gain_speed, gain_path]
                 period=period,
                 predict_time=3.0,
                 predict_velocity_samples_resolution=[10.0, 0.1],
-                obstacles_range_mm=800.0,
+                obstacles_range_mm=1000.0,
                 ttc_weight=0.1,
             )
             print("Path is ready, Entering IDLE state.")

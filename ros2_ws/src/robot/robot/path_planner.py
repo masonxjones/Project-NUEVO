@@ -157,9 +157,9 @@ class DWAPlanner():
         max_linear_acc: float = 300.0,
         max_angular_acc: float = 2.0,
         goal_tolerance: float = 100.0,
-        gains_of_costs: list[float] = [2.0, 0.02, 0.2, 0.8, 0.1],
+        gains_of_costs: list[float] = [2.0, 0.02, 0.2, 0.5, 0.1],
         dt: float = 0.1,
-        predict_time: float = 2.0,
+        predict_time: float = 3.0,
         predict_velocity_samples_resolution: list[float] = [20.0, 0.1],
         robot_radius: float = 150.0,
         obstacles_range: float = 1000.0,
@@ -275,9 +275,9 @@ class DWAPlanner():
                 return float('inf'), min_dist # If the minimum distance to an obstacle is less than or equal to the robot's radius, return infinite cost to indicate a collision risk
 
         min_dist /= 1000
-        return 1.0 / (min_dist + ttc * self.ttc_weight + 1e-5), min_dist # cost is inversely proportional to the minimum distance to obstacles
-        # sigma = 1.0
-        # return np.exp(- ((min_dist + ttc * self.ttc_weight) ** 2) / (2 * sigma ** 2)), min_dist # Gaussian obstacle cost
+        # return 1.0 / (min_dist + ttc * self.ttc_weight + 1e-5), min_dist # cost is inversely proportional to the minimum distance to obstacles
+        sigma = 0.1
+        return np.exp(- ((min_dist + ttc * self.ttc_weight) ** 2) / (2 * sigma ** 2)), min_dist # Gaussian obstacle cost
 
     def calc_path_cost(self, traj, path):
         distances = [np.min(np.linalg.norm(path - p[:2], axis=1)) for p in traj]
@@ -318,6 +318,8 @@ class DWAPlanner():
             obstacles = obstacles[obstacles[:,0] > 0,:]
             # transform obstacles from robot frame to world frame.
             obstacles = (np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]) @ obstacles.T).T + np.array([[x, y],])
+            
+            obstacles = np.float64([(0,1000.0),]) # virtual obstacle for testing
             dists = np.linalg.norm(obstacles-np.float64([[x, y]]), axis=1)
             obstacles = obstacles[(dists >= self.robot_radius) & (dists < self.obstacles_range)]
 
