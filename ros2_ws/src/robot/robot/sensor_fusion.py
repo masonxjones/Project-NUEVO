@@ -57,7 +57,7 @@ class OrientationComplementaryFilter(SensorFusion):
         Default 0.02 gives gentle long-term drift correction.
     """
 
-    def __init__(self, alpha: float = 0.02) -> None:
+    def __init__(self, alpha: float = 0.0) -> None:
         self.alpha = max(0.0, min(1.0, float(alpha)))
 
     def update(

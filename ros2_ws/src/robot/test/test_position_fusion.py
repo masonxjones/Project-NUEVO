@@ -155,6 +155,7 @@ class PositionFusionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.node = FakeNode()
         self.robot = self.mod.Robot(self.node)
+        self.robot.set_gps_offset(0.0, 0.0)
 
     # ------------------------------------------------------------------
     # Initial state
