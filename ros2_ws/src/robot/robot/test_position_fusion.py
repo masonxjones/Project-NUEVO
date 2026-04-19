@@ -60,9 +60,9 @@ from robot.hardware_map import DEFAULT_FSM_HZ
 
 # ── Tunable parameters ────────────────────────────────────────────────────────
 
-DRIVE_DISTANCE_MM     = 1000.0   # mm — distance to drive once inside GPS range
-DRIVE_SPEED_MM_S      = 100.0   # mm/s forward speed
-POSITION_FUSION_ALPHA      = 0.3     # GPS weight for complementary filter (0–1); tune this
+DRIVE_DISTANCE_MM     = 100.0   # mm — distance to drive once inside GPS range
+DRIVE_SPEED_MM_S      = 10.0   # mm/s forward speed
+POSITION_FUSION_ALPHA      = 1     # GPS weight for complementary filter (0–1); tune this
 GPS_SEARCH_EXTRA_MM   = 2000.0  # mm — extra distance to drive past DRIVE_DISTANCE_MM
                                  #       searching for GPS if not yet acquired; set to 0
                                  #       to disable the extension and stop at DRIVE_DISTANCE_MM
@@ -205,7 +205,8 @@ def _drive_straight(robot: Robot, rec: _Record) -> None:
     next_tick = t_start
     odom_x = odom_x0
     odom_y = odom_y0
-    gps_aligned = False
+    #gps_aligned = False
+
     # Odometry position at the moment GPS was first acquired.
     gps_acq_odom_x = odom_x0
     gps_acq_odom_y = odom_y0
@@ -243,25 +244,30 @@ def _drive_straight(robot: Robot, rec: _Record) -> None:
             gps_x_mm = robot._gps_x_mm
             gps_y_mm = robot._gps_y_mm
 
-        gps_on = robot.is_gps_active()
+        gps_on = robot.is_gps_active() # for information purposes
         if gps_on and not gps_aligned:
-            # Align the GPS frame translation to the odometry/world frame
-            # the moment GPS first becomes available.
-            learned_offset_x = odom_x - gps_x_mm
-            learned_offset_y = odom_y - gps_y_mm
-            robot.set_gps_offset(learned_offset_x, learned_offset_y)
+        #    # Align the GPS frame translation to the odometry/world frame
+        #    # the moment GPS first becomes available.
+        #    learned_offset_x = odom_x - gps_x_mm
+        #    learned_offset_y = odom_y - gps_y_mm
+        #    robot.set_gps_offset(learned_offset_x, learned_offset_y)
             gps_aligned = True
             gps_acq_odom_x = odom_x
             gps_acq_odom_y = odom_y
-            dist_at_acq = math.hypot(odom_x - odom_x0, odom_y - odom_y0)
-            print(
-                f"[pos_fusion_test] GPS acquired at {dist_at_acq:.0f} mm — learned offset "
-                f"({learned_offset_x:.1f}, {learned_offset_y:.1f}) mm. "
-                f"Driving {DRIVE_DISTANCE_MM:.0f} mm more inside GPS range."
-            )
-            # Wait for the next tag update so the new offset is reflected in
-            # the internal GPS state before recording/using fused position.
-            continue
+        #    dist_at_acq = math.hypot(odom_x - odom_x0, odom_y - odom_y0)
+        #    print(
+        #        f"[pos_fusion_test] GPS acquired at {dist_at_acq:.0f} mm — learned offset "
+        #        f"({learned_offset_x:.1f}, {learned_offset_y:.1f}) mm. "
+        #        f"Driving {DRIVE_DISTANCE_MM:.0f} mm more inside GPS range."
+        #    )
+        #    # Wait for the next tag update so the new offset is reflected in
+        #    # the internal GPS state before recording/using fused position.
+        #    continue
+
+
+        # algorithm:
+        # 1. if entered GPS region, use the gps reading (with the gps offset already in place, no need to add another gps offset)
+        # 2. start using the GPS x and y, and use the entrypoint gps location as the offset to add to the odometer
 
         fused_x_mm, fused_y_mm, _ = robot._get_pose_mm()
 

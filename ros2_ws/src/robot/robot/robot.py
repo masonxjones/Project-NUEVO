@@ -219,8 +219,8 @@ class Robot:
         self._pose:    tuple = (0.0, 0.0, 0.0)  # x_mm, y_mm, theta_rad (raw odometry)
         # ── GPS position fusion ───────────────────────────────────────────────
         self._tracked_tag_id:    int         = -1    # tag to track (-1 = any)
-        self._gps_x_mm:          float       =  0.0  # latest GPS x in mm (arena frame)
-        self._gps_y_mm:          float       =   0.0 # latest GPS y in mm (arena frame)
+        self._gps_x_mm:          float       = 0.0  # latest GPS x in mm (arena frame)
+        self._gps_y_mm:          float       = 0.0  # latest GPS y in mm (arena frame)
         self._gps_last_time:     float       = 0.0   # monotonic timestamp of last GPS fix
         self._gps_timeout_s:     float       = 1.0   # seconds before GPS is treated as stale
         self._gps_offset_x_mm:   float       = 304.8   # GPS frame → arena frame translation x
@@ -437,17 +437,13 @@ class Robot:
                     )
                     # Update GPS state unconditionally — the warning is advisory only
                     # and must not gate the position update.
-                    tag_x = float(det.y) * 1000.0 + self._gps_offset_x_mm
-                    tag_y = float(det.x) * 1000.0 + self._gps_offset_y_mm
+                    tag_x = float(det.x) * 1000.0 + self._gps_offset_x_mm
+                    tag_y = float(det.y) * 1000.0 + self._gps_offset_y_mm
                     # Correct for tag not being at the robot body origin.
                     # Rotate the body-frame tag offset into arena frame and subtract
                     # so _gps_x/y_mm reflect the robot centre, not the tag centre.
-                    cos_t = math.cos(self._fused_theta)
-                    sin_t = math.sin(self._fused_theta)
-                    bx = self._tag_body_offset_x_mm
-                    by = self._tag_body_offset_y_mm
-                    self._gps_x_mm     = tag_x - (cos_t * bx - sin_t * by)
-                    self._gps_y_mm     = tag_y - (sin_t * bx + cos_t * by)
+                    self._gps_x_mm      = tag_x - self._tag_body_offset_x_mm 
+                    self._gps_y_mm      = tag_y - self._tag_body_offset_y_mm
                     self._gps_last_time = _time.monotonic()
                 # Log outside the lock so a slow or failing logger call cannot
                 # block kinematics callbacks that also acquire the lock.
