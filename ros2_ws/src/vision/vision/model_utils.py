@@ -9,7 +9,7 @@ import ncnn
 import numpy as np
 
 
-DEFAULT_MODEL_DIR = "yolo26n_ncnn_imgsz_640"
+DEFAULT_MODEL_DIR = "yolo26n_ncnn_imgsz_416"
 
 
 @dataclass(frozen=True)

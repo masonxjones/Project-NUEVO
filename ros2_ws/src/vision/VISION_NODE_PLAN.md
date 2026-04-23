@@ -9,16 +9,17 @@ without importing Ultralytics or Torch.
 Default model:
 
 ```text
-ros2_ws/src/vision/data/yolo26n_ncnn_imgsz_640/
+ros2_ws/src/vision/data/yolo26n_ncnn_imgsz_416/
 ```
 
-The model is exported at image size 640 and is tracked in Git because the NCNN
-runtime files are small enough for the project repository.
+The model is exported at image size 416 and is tracked in Git because the NCNN
+runtime files are small enough for the project repository. The 640 export is
+kept in the same data folder as a quality baseline for comparison.
 
 Default runtime parameters:
 
 - `model_path`: exported NCNN model directory
-- `model_imgsz`: `640`
+- `model_imgsz`: `416`
 - `class_filter`: `traffic light,stop sign,person`
 - `confidence_threshold`: `0.25`
 - `process_rate_hz`: `5.0`
@@ -92,7 +93,7 @@ Launch with:
 ```bash
 ros2 run vision vision_node --ros-args \
   -p model_path:=/ros2_ws/src/vision/data/<model_folder> \
-  -p model_imgsz:=640 \
+  -p model_imgsz:=416 \
   -p class_filter:="traffic light,stop sign,person"
 ```
 

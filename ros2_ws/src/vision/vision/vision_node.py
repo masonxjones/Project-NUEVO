@@ -33,7 +33,7 @@ class VisionNode(Node):
         self.declare_parameter("camera_fps", 5.0)
         self.declare_parameter("process_rate_hz", 5.0)
         self.declare_parameter("model_path", str(model_default))
-        self.declare_parameter("model_imgsz", 640)
+        self.declare_parameter("model_imgsz", 416)
         self.declare_parameter("confidence_threshold", 0.25)
         self.declare_parameter("iou_threshold", 0.7)
         self.declare_parameter("max_detections", 20)
