@@ -26,7 +26,7 @@ import math
 # Robot build configuration
 # ---------------------------------------------------------------------------
 
-TAG_ID = 11 # set aruco tag ID 11 
+TAG_ID = 26 # set aruco tag ID 11 
 POSITION_UNIT = Unit.MM
 WHEEL_DIAMETER = 76.2
 WHEEL_BASE = 200
