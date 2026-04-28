@@ -68,7 +68,6 @@ def run(robot: Robot) -> None:
         if state == "INIT":
             start_robot(robot)
             print("[FSM] INIT (odometry reset)")
-<<<<<<< HEAD
             path_control_points = [ #Define your path control points here (x, y) in mm
                 (0.0, 0.0), # 1st point
                 (0.0, 500.0), # 2nd point
@@ -79,7 +78,6 @@ def run(robot: Robot) -> None:
             # path1 = path_control_points
             path1 = densify_polyline(path_control_points, spacing=20.0)
             remaining_path = path1.copy() 
-=======
             # center lane
             # path_control_points = [
             #     (0.0,   0.0),
@@ -111,7 +109,6 @@ def run(robot: Robot) -> None:
                 x_L=300.0,
             )
             robot.planner.set_path(path)
->>>>>>> upstream/main
             print("Path is ready, Entering IDLE state.")
             print("[FSM] IDLE - Press BTN_1 to enter MOVING state.")
             state = "IDLE"
@@ -120,7 +117,6 @@ def run(robot: Robot) -> None:
             show_idle_leds(robot)
             robot._draw_lidar_obstacles()
             if robot.get_button(Button.BTN_1):
-<<<<<<< HEAD
                 LOOKAHEAD_DIST = 50.0 # Lookahead distance in mm (adjust as needed)
                 planner1 = PurePursuitPlanner(
                     lookahead_dist=LOOKAHEAD_DIST, 
@@ -128,9 +124,7 @@ def run(robot: Robot) -> None:
                     goal_tolerance=10.0, # Distance in mm to consider the target reached (adjust as needed)
              )
                 print("Pure Pursuit Planner is initialized. Start Moving!")
-=======
                 print("Start Moving!")
->>>>>>> upstream/main
                 print("[FSM] MOVING")
                 state = "MOVING"
             if robot.get_button(Button.BTN_2):
@@ -139,7 +133,6 @@ def run(robot: Robot) -> None:
 
         elif state == "MOVING":
             show_moving_leds(robot)
-<<<<<<< HEAD
             """Start your code here"""
             # Step 1: Get current pose, including current coordinates and heading angle in degrees 
             # using robot.get_pose() function. Store the values in current_x, current_y, and current_theta_deg variables. 
@@ -175,13 +168,11 @@ def run(robot: Robot) -> None:
             #print(f"Current Pursuit Point: ({current_pursuit_x:.1f}, {current_pursuit_y:.1f})")            
             print("Finish your code in Task 2") # Delete this line after you finish Task 2
             
-=======
             # if next_tick % 0.5 < period: # print every half second
             #     robot._draw_lidar_obstacles()
             #     print("Obstacle figure updated.")
             state = robot._nav_follow_pp_path_loop()
 
->>>>>>> upstream/main
         # FSM refresh rate control
         next_tick += period
         sleep_s = next_tick - time.monotonic()
