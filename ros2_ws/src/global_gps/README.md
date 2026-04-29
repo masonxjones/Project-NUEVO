@@ -223,4 +223,4 @@ def _on_gps_update(self, msg: TagDetectionArray) -> None:
   when rover markers are visible.
 
 **Multiple `/bridge` nodes visible**
-- See `ros2_ws/TROUBLE_SHOOT.md`.
+- See [`docs/ros2/troubleshooting.md`](../../../docs/ros2/troubleshooting.md).

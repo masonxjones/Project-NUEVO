@@ -12,8 +12,8 @@ The current ROS2 design keeps the workspace small and beginner-friendly:
 
 If you are new to ROS2, read these files in order:
 
-1. [ROS2_NODES_DESIGN.md](ROS2_NODES_DESIGN.md)
-2. [BRIDGE_RUNTIME.md](BRIDGE_RUNTIME.md)
+1. [docs/ros2/ros2_nodes_design.md](../docs/ros2/ros2_nodes_design.md)
+2. [docs/ros2/bridge_runtime.md](../docs/ros2/bridge_runtime.md)
 3. this README
 
 
@@ -28,9 +28,13 @@ ros2_ws/
 │   ├── sensors/             # Pi-side sensor nodes outside the Arduino firmware
 │   └── vision/              # camera and perception nodes
 ├── docker/                  # Docker image, compose files, and entrypoint scripts
-├── ROS2_NODES_DESIGN.md
-├── BRIDGE_RUNTIME.md
-└── RPI_SETUP.md             # legacy note; the setup steps are also included below
+└── README.md
+```
+
+Workspace-level ROS2 docs now live in:
+
+```text
+docs/ros2/
 ```
 
 
@@ -133,7 +137,8 @@ COMPOSE=ros2_ws/docker/docker-compose.vm.yml
 ### 2. Raspberry Pi UART Setup
 
 If you are using a real Raspberry Pi 5 with the Arduino bridge, enable UART
-first.
+first. A shorter reference is also in
+[`docs/ros2/rpi_setup.md`](../docs/ros2/rpi_setup.md).
 
 ```bash
 sudo nano /boot/firmware/config.txt
@@ -325,8 +330,8 @@ ros2 run robot robot
 ```
 
 The `robot` node is the main student application layer. Students only edit
-`src/robot/robot/main.py`. See [ROBOT_NODE_DESIGN.md](src/robot/ROBOT_NODE_DESIGN.md)
-for the API reference.
+`src/robot/robot/main.py`. See
+[`src/robot/README.md`](src/robot/README.md) for the API reference.
 
 The `sensors` and `vision` packages can be started the same way when needed.
 
