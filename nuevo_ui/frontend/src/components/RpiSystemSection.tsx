@@ -1,8 +1,5 @@
 import { Wifi, WifiOff, Cable, AlertCircle } from 'lucide-react';
 import { useRobotStore } from '../store/robotStore';
-import { WorldCanvas } from './WorldCanvas';
-import { GpsStatusCard } from './GpsStatusCard';
-import { RosNodesCard } from './RosNodesCard';
 
 export function RpiSystemSection() {
   const connection = useRobotStore((s) => s.connection);
@@ -86,21 +83,6 @@ export function RpiSystemSection() {
           )}
         </div>
 
-        {/* ── World canvas ──────────────────────────────────────────────── */}
-        <div className="mt-4">
-          <p className="text-xs text-white/50 mb-2">World Map</p>
-          <WorldCanvas />
-        </div>
-
-        {/* ── GPS status ────────────────────────────────────────────────── */}
-        <div className="mt-3">
-          <GpsStatusCard />
-        </div>
-
-        {/* ── ROS nodes ─────────────────────────────────────────────────── */}
-        <div className="mt-3">
-          <RosNodesCard />
-        </div>
       </div>
     </div>
   );
