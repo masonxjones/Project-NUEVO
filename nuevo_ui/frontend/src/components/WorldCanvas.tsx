@@ -7,7 +7,23 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useRobotStore, LIDAR_WINDOW_FRAMES } from '../store/robotStore'
 
-const PAD_MM = 200
+// Venue: 5×6 grid, 610 mm cells.
+// Origin (0,0) = centre of bottom border of the bottom-left cell.
+// → venue spans x: -305..2745, y: 0..3660
+const GRID_MM        = 610
+const VENUE_COLS     = 5
+const VENUE_ROWS     = 6
+const VENUE_LEFT_MM  = -GRID_MM / 2                          // -305
+const VENUE_RIGHT_MM =  VENUE_LEFT_MM + VENUE_COLS * GRID_MM // 2745
+const VENUE_TOP_MM   =  VENUE_ROWS * GRID_MM                 // 3660
+const VENUE_PAD_MM   =  GRID_MM / 2                          // 305
+
+const VENUE_EXT = {
+  minX: VENUE_LEFT_MM  - VENUE_PAD_MM,
+  maxX: VENUE_RIGHT_MM + VENUE_PAD_MM,
+  minY:                - VENUE_PAD_MM,
+  maxY: VENUE_TOP_MM   + VENUE_PAD_MM,
+}
 
 interface Trails { odom: boolean; gps: boolean; fused: boolean; lidar: boolean }
 
@@ -27,7 +43,6 @@ export function WorldCanvas() {
   const gpsStatus   = useRobotStore((s) => s.gpsStatus)
   const lidarPoints = useRobotStore((s) => s.lidarPoints)
 
-  const scaleRef = useRef<{ minX: number; maxX: number; minY: number; maxY: number } | null>(null)
   const [trails, setTrails] = useState<Trails>({ odom: true, gps: true, fused: true, lidar: true })
 
   const toggle = useCallback((key: keyof Trails) => {
@@ -57,22 +72,18 @@ export function WorldCanvas() {
           allPts.push([frame.xs[i], frame.ys[i]])
     }
 
+    // Start from venue bounds; expand only if data falls outside.
+    let ext = { ...VENUE_EXT }
     if (allPts.length > 0) {
       const xs = allPts.map((p) => p[0])
       const ys = allPts.map((p) => p[1])
-      const next = {
-        minX: Math.min(...xs) - PAD_MM, maxX: Math.max(...xs) + PAD_MM,
-        minY: Math.min(...ys) - PAD_MM, maxY: Math.max(...ys) + PAD_MM,
+      ext = {
+        minX: Math.min(ext.minX, Math.min(...xs) - VENUE_PAD_MM),
+        maxX: Math.max(ext.maxX, Math.max(...xs) + VENUE_PAD_MM),
+        minY: Math.min(ext.minY, Math.min(...ys) - VENUE_PAD_MM),
+        maxY: Math.max(ext.maxY, Math.max(...ys) + VENUE_PAD_MM),
       }
-      scaleRef.current = scaleRef.current ? {
-        minX: Math.min(scaleRef.current.minX, next.minX),
-        maxX: Math.max(scaleRef.current.maxX, next.maxX),
-        minY: Math.min(scaleRef.current.minY, next.minY),
-        maxY: Math.max(scaleRef.current.maxY, next.maxY),
-      } : next
     }
-
-    const ext    = scaleRef.current ?? { minX: -500, maxX: 500, minY: -500, maxY: 500 }
     const rangeX = Math.max(ext.maxX - ext.minX, 1)
     const rangeY = Math.max(ext.maxY - ext.minY, 1)
     const scale  = Math.min(W / rangeX, H / rangeY)
@@ -86,16 +97,24 @@ export function WorldCanvas() {
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.fillRect(0, 0, W, H)
 
-    // Grid — subtle white lines
-    const gridMm = rangeX > 4000 ? 1000 : rangeX > 1000 ? 500 : 200
+    // Venue boundary rectangle
+    {
+      const [vx0, vy0] = toC(VENUE_LEFT_MM, 0)
+      const [vx1, vy1] = toC(VENUE_RIGHT_MM, VENUE_TOP_MM)
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)'
+      ctx.lineWidth   = 1
+      ctx.strokeRect(vx0, vy1, vx1 - vx0, vy0 - vy1)
+    }
+
+    // Venue grid lines at 610 mm
     ctx.strokeStyle = 'rgba(255,255,255,0.08)'
     ctx.lineWidth   = 0.5
-    for (let gx = Math.floor(ext.minX / gridMm) * gridMm; gx <= ext.maxX; gx += gridMm) {
-      const [cx] = toC(gx, 0)
+    for (let col = 0; col <= VENUE_COLS; col++) {
+      const [cx] = toC(VENUE_LEFT_MM + col * GRID_MM, 0)
       ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke()
     }
-    for (let gy = Math.floor(ext.minY / gridMm) * gridMm; gy <= ext.maxY; gy += gridMm) {
-      const [, cy] = toC(0, gy)
+    for (let row = 0; row <= VENUE_ROWS; row++) {
+      const [, cy] = toC(0, row * GRID_MM)
       ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke()
     }
 
@@ -109,12 +128,11 @@ export function WorldCanvas() {
     }
 
     // Scale label
-    const gridLabel = gridMm >= 1000 ? `${gridMm / 1000} m` : `${gridMm} mm`
     ctx.fillStyle = 'rgba(255,255,255,0.40)'
     ctx.font = '9px monospace'
     ctx.textAlign = 'right'
     ctx.textBaseline = 'bottom'
-    ctx.fillText(`grid: ${gridLabel}`, W - 4, H - 3)
+    ctx.fillText(`grid: ${GRID_MM} mm`, W - 4, H - 3)
 
     // Odometry trail (green)
     if (trails.odom && odomTrail.length > 1) {

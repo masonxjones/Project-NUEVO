@@ -23,14 +23,22 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from bridge_interfaces.msg import FusedPose, LidarWorldPoints, SensorKinematics, TagDetectionArray, TagDetection
 
 # ── Tune these ────────────────────────────────────────────────────────────────
-CIRCLE_RADIUS_MM   = 600.0   # robot orbit radius
+# Venue: 5×6 grid, 610 mm cells. Origin = centre of bottom border of bottom-left cell.
+# x: -305 .. 2745,  y: 0 .. 3660
+GRID_MM            = 610.0
+VENUE_LEFT_MM      = -GRID_MM / 2            # -305
+VENUE_RIGHT_MM     = VENUE_LEFT_MM + 5 * GRID_MM  # 2745
+VENUE_H_MM         = 6 * GRID_MM            # 3660
+VENUE_CX_MM        = (VENUE_LEFT_MM + VENUE_RIGHT_MM) / 2   # 1220
+VENUE_CY_MM        = VENUE_H_MM / 2                          # 1830
+
+CIRCLE_RADIUS_MM   = 800.0   # robot orbit radius around venue centre
 CIRCLE_PERIOD_S    = 20.0    # seconds per full lap
-ROOM_HALF_SIZE_MM  = 1500.0  # half-width of the fake square room
 LIDAR_RAYS         = 60      # number of fake lidar rays
 PUBLISH_HZ         = 10      # update rate
 
 GPS_TAG_ID         = 7       # fake ArUco tag ID
-GPS_RADIUS_MM      = 900.0   # GPS tag orbit radius (larger than robot)
+GPS_RADIUS_MM      = 1200.0  # GPS tag orbit radius around venue centre
 GPS_PERIOD_S       = 35.0    # seconds per GPS orbit lap (different speed)
 GPS_VISIBLE_S      = 3.0     # seconds tag is "detected" per cycle
 GPS_HIDDEN_S       = 2.0     # seconds tag is "lost" per cycle
@@ -67,9 +75,9 @@ class VMDemo(Node):
         self._t += self._dt
         phase = (self._t / CIRCLE_PERIOD_S) * 2.0 * math.pi
 
-        # ── Robot pose (circle) ───────────────────────────────────────────────
-        rx = CIRCLE_RADIUS_MM * math.cos(phase)
-        ry = CIRCLE_RADIUS_MM * math.sin(phase)
+        # ── Robot pose (circle around venue centre) ───────────────────────────
+        rx = VENUE_CX_MM + CIRCLE_RADIUS_MM * math.cos(phase)
+        ry = VENUE_CY_MM + CIRCLE_RADIUS_MM * math.sin(phase)
         rtheta = phase + math.pi / 2.0
 
         gps_cycle = GPS_VISIBLE_S + GPS_HIDDEN_S
@@ -86,8 +94,8 @@ class VMDemo(Node):
         # ── Odometry (drifts outward by ODOM_DRIFT_PER_LAP_MM per lap) ───────
         laps = self._t / CIRCLE_PERIOD_S
         odom_r = CIRCLE_RADIUS_MM + laps * ODOM_DRIFT_PER_LAP_MM
-        ox_pos = odom_r * math.cos(phase)
-        oy_pos = odom_r * math.sin(phase)
+        ox_pos = VENUE_CX_MM + odom_r * math.cos(phase)
+        oy_pos = VENUE_CY_MM + odom_r * math.sin(phase)
         sk = SensorKinematics()
         sk.header.stamp = fp.header.stamp
         sk.x     = float(ox_pos)
@@ -100,8 +108,8 @@ class VMDemo(Node):
 
         # ── Fake GPS tag detection ────────────────────────────────────────────
         gps_phase = (self._t / GPS_PERIOD_S) * 2.0 * math.pi
-        gps_x_m = (GPS_RADIUS_MM * math.cos(gps_phase)) / 1000.0
-        gps_y_m = (GPS_RADIUS_MM * math.sin(gps_phase)) / 1000.0
+        gps_x_m = (VENUE_CX_MM + GPS_RADIUS_MM * math.cos(gps_phase)) / 1000.0
+        gps_y_m = (VENUE_CY_MM + GPS_RADIUS_MM * math.sin(gps_phase)) / 1000.0
 
         arr = TagDetectionArray()
         arr.header.stamp = fp.header.stamp
@@ -116,17 +124,16 @@ class VMDemo(Node):
             arr.detections = []
         self._gps_pub.publish(arr)
 
-        # ── Fake lidar (square room) ──────────────────────────────────────────
+        # ── Fake lidar — ray-cast against venue walls ─────────────────────────
         xs, ys = [], []
         for i in range(LIDAR_RAYS):
             angle = rtheta + (i / LIDAR_RAYS) * 2.0 * math.pi
             dx, dy = math.cos(angle), math.sin(angle)
-            R = ROOM_HALF_SIZE_MM
             ts = []
             if abs(dx) > 1e-6:
-                ts += [(R - rx) / dx, (-R - rx) / dx]
+                ts += [(VENUE_RIGHT_MM - rx) / dx, (VENUE_LEFT_MM - rx) / dx]
             if abs(dy) > 1e-6:
-                ts += [(R - ry) / dy, (-R - ry) / dy]
+                ts += [(VENUE_H_MM - ry) / dy, (0.0 - ry) / dy]
             t_hit = min(t for t in ts if t > 10.0)
             jitter = random.uniform(-20.0, 20.0)
             xs.append(rx + dx * (t_hit + jitter))
