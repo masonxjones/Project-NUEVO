@@ -55,45 +55,39 @@ class PurePursuitPlannerTests(unittest.TestCase):
 
 
 class APFPlannerTests(unittest.TestCase):
-    def test_compute_velocity_is_straight_on_without_obstacles(self) -> None:
+    def test_navigate_straight_ahead_no_obstacles(self) -> None:
         planner = APFPlanner(
-            lookahead_dist=100.0,
-            max_linear=100.0,
-            max_angular=1.0,
+            max_linear=200.0, max_angular=2.0,
+            attraction_gain=1.0, repulsion_gain=500.0,
+            repulsion_range=300.0, goal_tolerance=20.0, heading_gain=2.0,
         )
+        empty = np.empty((0, 2))
 
-        linear, angular = planner.compute_velocity(
-            pose=(0.0, 0.0, 0.0),
-            waypoints=np.array([[100.0, 0.0]]),
-            max_linear=100.0,
-        )
+        linear, angular = planner.navigate_to_goal((0, 0, 0), (500, 0), empty)
 
         self.assertGreater(linear, 0.0)
-        self.assertAlmostEqual(angular, 0.0, places=3)
+        self.assertAlmostEqual(angular, 0.0, places=2)
 
-    def test_compute_velocity_turns_away_from_front_left_obstacle(self) -> None:
+    def test_navigate_turns_left_toward_goal(self) -> None:
         planner = APFPlanner(
-            lookahead_dist=100.0,
-            max_linear=100.0,
-            max_angular=1.0,
-            repulsion_gain=800.0,
-            repulsion_range=200.0,
-            obstacle_provider=lambda: [(120.0, 40.0)],
+            max_linear=200.0, max_angular=2.0,
+            attraction_gain=1.0, repulsion_gain=500.0,
+            repulsion_range=300.0, goal_tolerance=20.0, heading_gain=2.0,
         )
+        empty = np.empty((0, 2))
 
-        linear, angular = planner.compute_velocity(
-            pose=(0.0, 0.0, 0.0),
-            waypoints=np.array([[200.0, 0.0]]),
-            max_linear=100.0,
-        )
+        _, angular = planner.navigate_to_goal((0, 0, 0), (0, 500), empty)
 
-        self.assertGreaterEqual(linear, 0.0)
-        self.assertLess(angular, 0.0)
+        self.assertGreater(angular, 0.0)
 
-    def test_get_obstacles_uses_provider(self) -> None:
-        planner = APFPlanner(obstacle_provider=lambda: [(10.0, 20.0), (30.0, -40.0)])
+    def test_navigate_stops_at_goal(self) -> None:
+        planner = APFPlanner(goal_tolerance=20.0)
+        empty = np.empty((0, 2))
 
-        self.assertEqual(planner.get_obstacles(), [(10.0, 20.0), (30.0, -40.0)])
+        linear, angular = planner.navigate_to_goal((495, 0, 0), (500, 0), empty)
+
+        self.assertEqual(linear, 0.0)
+        self.assertEqual(angular, 0.0)
 
 
 if __name__ == "__main__":

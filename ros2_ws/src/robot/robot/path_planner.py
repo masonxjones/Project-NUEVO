@@ -2,16 +2,15 @@
 path_planner.py — pure-algorithm path planning library
 =======================================================
 These classes are stateless algorithm helpers. They do NOT own threads or
-ROS subscriptions. The Robot class calls compute_velocity() from its own
-navigation thread.
+ROS subscriptions.
 
-To use a planner in your navigation code, just instantiate it and call
-compute_velocity() with the current pose and remaining waypoints.
+``PurePursuitPlanner`` — waypoint-following via lookahead point.
+``APFPlanner``         — single-goal Artificial Potential Fields with a
+                         live world-frame obstacle cloud (from lidar).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import math
 import numpy as np
 
@@ -143,96 +142,33 @@ class PurePursuitPlanner(PathPlanner):
 # APF
 # =============================================================================
 
-class APFPlanner(PathPlanner):
+class APFPlanner:
     """
-    Artificial Potential Fields planner.
+    Artificial Potential Fields planner — single-goal variant.
 
-    Combines an attractive force toward the goal with repulsive forces from
-    obstacles. Obstacle data comes from get_obstacles(), which reads the
-    lidar topic once it is available.
-
-    This first version is usable today with caller-provided robot-frame
-    obstacles. A future lidar/object-detection node can feed live obstacles
-    through the Robot obstacle-provider API without changing the planner.
+    Combines an attractive force toward one goal point with repulsive forces
+    from a world-frame obstacle cloud supplied by the caller (e.g. from
+    ``LidarScan.to_world_frame()``).  No waypoints, no lookahead buffer, no
+    obstacle callbacks — the caller decides what obstacles are relevant.
     """
 
     def __init__(
         self,
-        lookahead_dist: float = 200,
-        max_linear: float = 200,
+        max_linear: float = 200.0,
         max_angular: float = 2.0,
         repulsion_gain: float = 500.0,
         repulsion_range: float = 300.0,
         goal_tolerance: float = 20.0,
         attraction_gain: float = 1.0,
         heading_gain: float = 2.0,
-        obstacle_provider: Callable[[], list[tuple[float, float]]] | None = None,
     ) -> None:
-        self._lookahead = lookahead_dist
-        self._max_linear = max_linear
+        self._max_linear  = max_linear
         self._max_angular = max_angular
-        self._rep_gain = repulsion_gain
-        self._rep_range = repulsion_range
+        self._rep_gain    = repulsion_gain
+        self._rep_range   = repulsion_range
         self.goal_tolerance = goal_tolerance
-        self._attr_gain = attraction_gain
+        self._attr_gain   = attraction_gain
         self._heading_gain = heading_gain
-        self._obstacle_provider = obstacle_provider
-
-    def compute_velocity(
-        self,
-        pose: tuple[float, float, float],
-        waypoints: list[tuple[float, float]],
-        max_linear: float,
-    ) -> tuple[float, float]:
-        x, y, theta = pose
-        tx, ty = self._lookahead_point(x, y, waypoints)
-        dx = tx - x
-        dy = ty - y
-
-        goal_x_r = math.cos(theta) * dx + math.sin(theta) * dy
-        goal_y_r = -math.sin(theta) * dx + math.cos(theta) * dy
-        goal_dist = math.hypot(goal_x_r, goal_y_r)
-        if goal_dist < 1e-6:
-            return 0.0, 0.0
-
-        attr_x = self._attr_gain * goal_x_r / goal_dist
-        attr_y = self._attr_gain * goal_y_r / goal_dist
-
-        rep_x = 0.0
-        rep_y = 0.0
-        nearest_obstacle = self._rep_range
-        for obs_x_r, obs_y_r in self.get_obstacles():
-            dist = math.hypot(obs_x_r, obs_y_r)
-            if dist < 1e-6 or dist >= self._rep_range:
-                continue
-            nearest_obstacle = min(nearest_obstacle, dist)
-            repulse = self._rep_gain * ((1.0 / dist) - (1.0 / self._rep_range)) / (dist * dist)
-            rep_x += repulse * (-obs_x_r / dist)
-            rep_y += repulse * (-obs_y_r / dist)
-
-        force_x = attr_x + rep_x
-        force_y = attr_y + rep_y
-        if math.hypot(force_x, force_y) < 1e-6:
-            return 0.0, 0.0
-
-        heading_error = math.atan2(force_y, force_x)
-        forward_scale = max(0.0, math.cos(heading_error))
-        linear_limit = min(float(max_linear), self._max_linear)
-        goal_scale = min(1.0, goal_dist / max(self.goal_tolerance * 2.0, 1e-6))
-        linear = linear_limit * forward_scale * goal_scale
-        if nearest_obstacle < self._rep_range:
-            linear *= max(0.0, min(1.0, nearest_obstacle / self._rep_range))
-        if force_x <= 0.0:
-            linear = 0.0
-
-        angular = self._heading_gain * heading_error
-        angular = max(-self._max_angular, min(self._max_angular, angular))
-        return linear, angular
-
-    def get_obstacles(self) -> list[tuple[float, float]]:
-        if self._obstacle_provider is None:
-            return []
-        return list(self._obstacle_provider())
 
     def navigate_to_goal(
         self,
@@ -241,22 +177,14 @@ class APFPlanner(PathPlanner):
         obstacles: np.ndarray,
     ) -> tuple[float, float]:
         """
-        Option-B APF: single goal point with caller-supplied world-frame obstacle cloud.
+        Return ``(linear_mm_s, angular_rad_s)`` toward *goal*, avoiding *obstacles*.
 
         Parameters
         ----------
-        pose:
-            ``(x_mm, y_mm, theta_rad)`` — current robot pose in world frame.
-        goal:
-            ``(x_mm, y_mm)`` — target position in world frame. The caller advances
-            this to the next waypoint once the robot is within ``goal_tolerance``.
-        obstacles:
-            ``(N, 2)`` float array of obstacle positions in world-frame mm.
-            Pass ``LidarScan.to_world_frame()`` output directly.
-
-        Returns
-        -------
-        ``(linear_mm_s, angular_rad_s)``
+        pose      : ``(x_mm, y_mm, theta_rad)`` in world frame
+        goal      : ``(x_mm, y_mm)`` target position in world frame
+        obstacles : ``(N, 2)`` float array of world-frame obstacle positions in mm;
+                    pass ``LidarScan.to_world_frame()`` output directly
         """
         px, py, theta = pose
         gx, gy = goal
@@ -268,13 +196,12 @@ class APFPlanner(PathPlanner):
         if dist_to_goal <= self.goal_tolerance:
             return 0.0, 0.0
 
-        # Attractive force — unit vector scaled by gain, capped to influence range
-        # so the robot doesn't run at full attraction from very far away.
+        # Attractive force — capped so gain stays bounded far from goal
         attr_scale = self._attr_gain * min(dist_to_goal, self._rep_range)
         attr_x = attr_scale * dx / dist_to_goal
         attr_y = attr_scale * dy / dist_to_goal
 
-        # Repulsive force — summed over all obstacles within influence range
+        # Repulsive force — vectorised over obstacle cloud
         rep_x = 0.0
         rep_y = 0.0
         obs = np.asarray(obstacles)
@@ -294,25 +221,17 @@ class APFPlanner(PathPlanner):
         if math.hypot(force_x, force_y) < 1e-6:
             return 0.0, 0.0
 
-        desired = math.atan2(force_y, force_x)
-        ang_err = (desired - theta + math.pi) % (2.0 * math.pi) - math.pi
+        desired  = math.atan2(force_y, force_x)
+        ang_err  = (desired - theta + math.pi) % (2.0 * math.pi) - math.pi
 
         forward_scale = max(0.0, math.cos(ang_err))
-        goal_scale = min(1.0, dist_to_goal / max(2.0 * self.goal_tolerance, 1.0))
-        linear = self._max_linear * forward_scale * goal_scale
+        goal_scale    = min(1.0, dist_to_goal / max(2.0 * self.goal_tolerance, 1.0))
+        linear  = self._max_linear * forward_scale * goal_scale
 
         angular = self._heading_gain * ang_err
         angular = max(-self._max_angular, min(self._max_angular, angular))
 
         return linear, angular
-
-    def _lookahead_point(
-        self, x: float, y: float, waypoints: list[tuple[float, float]]
-    ) -> tuple[float, float]:
-        for wx, wy in waypoints:
-            if math.hypot(wx - x, wy - y) >= self._lookahead:
-                return wx, wy
-        return waypoints[-1]
 
 
 class PurePursuitPlannerWithAvoidance(PathPlanner):
