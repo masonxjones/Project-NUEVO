@@ -1,24 +1,26 @@
 """
-vm_demo.py — Fake robot + lidar data for UI development on a VM.
+vm_demo.py — Fake robot + lidar + GPS data for UI development on a VM.
 
-Publishes /fused_pose and /lidar_world_points so the World Canvas,
-GPS card, and ROS Nodes card all show live data without real hardware.
+Publishes /fused_pose, /lidar_world_points, and /tag_detections so all three
+RPi Sensors panels (World Map, GPS card, ROS Nodes) show live data.
 
 Run inside the Docker container after sourcing ROS2:
 
     source /ros2_ws/install/setup.bash
-    python3 /ros2_ws/vm_demo.py
+    python3 /ros2_ws/src/robot/robot/examples/vm_demo.py
 
-The robot drives a slow circle. Fake lidar points form a rough square
-"room" around the robot so the point cloud looks realistic.
+The robot drives a slow circle. A fake GPS tag sits at the origin and is
+"detected" for 3 s then "lost" for 2 s, cycling continuously.
+Fake lidar points form a square room around the robot.
 Press Ctrl-C to stop.
 """
 
 import math
+import random
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from bridge_interfaces.msg import FusedPose, LidarWorldPoints
+from bridge_interfaces.msg import FusedPose, LidarWorldPoints, TagDetectionArray, TagDetection
 
 # ── Tune these ────────────────────────────────────────────────────────────────
 CIRCLE_RADIUS_MM   = 600.0   # robot orbit radius
@@ -26,6 +28,12 @@ CIRCLE_PERIOD_S    = 20.0    # seconds per full lap
 ROOM_HALF_SIZE_MM  = 1500.0  # half-width of the fake square room
 LIDAR_RAYS         = 60      # number of fake lidar rays
 PUBLISH_HZ         = 10      # update rate
+
+GPS_TAG_ID         = 7       # fake ArUco tag ID
+GPS_TAG_X_M        = 0.0     # tag position in metres (world frame)
+GPS_TAG_Y_M        = 0.0
+GPS_VISIBLE_S      = 3.0     # seconds tag is "detected" per cycle
+GPS_HIDDEN_S       = 2.0     # seconds tag is "lost" per cycle
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -37,64 +45,80 @@ class VMDemo(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self._pose_pub  = self.create_publisher(FusedPose, '/fused_pose', best_effort)
-        self._lidar_pub = self.create_publisher(LidarWorldPoints, '/lidar_world_points', best_effort)
+        self._pose_pub  = self.create_publisher(FusedPose,          '/fused_pose',         best_effort)
+        self._lidar_pub = self.create_publisher(LidarWorldPoints,   '/lidar_world_points', best_effort)
+        self._gps_pub   = self.create_publisher(TagDetectionArray,  '/tag_detections',     10)
 
         self._t = 0.0
         self._dt = 1.0 / PUBLISH_HZ
         self.create_timer(self._dt, self._tick)
+
+        gps_cycle = GPS_VISIBLE_S + GPS_HIDDEN_S
         self.get_logger().info(
-            f'vm_demo started — robot circles r={CIRCLE_RADIUS_MM:.0f} mm, '
-            f'period={CIRCLE_PERIOD_S:.0f} s'
+            f'vm_demo started — robot r={CIRCLE_RADIUS_MM:.0f} mm, '
+            f'GPS tag #{GPS_TAG_ID} visible {GPS_VISIBLE_S:.0f}/{gps_cycle:.0f} s cycle'
         )
 
     def _tick(self):
         self._t += self._dt
         phase = (self._t / CIRCLE_PERIOD_S) * 2.0 * math.pi
 
-        # Robot pose — circle in world frame
+        # ── Robot pose (circle) ───────────────────────────────────────────────
         rx = CIRCLE_RADIUS_MM * math.cos(phase)
         ry = CIRCLE_RADIUS_MM * math.sin(phase)
-        rtheta = phase + math.pi / 2.0   # tangent direction
+        rtheta = phase + math.pi / 2.0
 
-        # Publish fused pose (GPS not active in VM)
+        gps_cycle = GPS_VISIBLE_S + GPS_HIDDEN_S
+        gps_visible = (self._t % gps_cycle) < GPS_VISIBLE_S
+
         fp = FusedPose()
         fp.header.stamp = self.get_clock().now().to_msg()
         fp.x          = float(rx)
         fp.y          = float(ry)
         fp.theta      = float(rtheta)
-        fp.gps_active = False
+        fp.gps_active = gps_visible
         self._pose_pub.publish(fp)
 
-        # Fake lidar — rays cast from robot toward a square room boundary.
-        # Each ray hits the nearest wall; add slight jitter so it looks scanned.
-        import random
+        # ── Fake GPS tag detection ────────────────────────────────────────────
+        # Publish non-empty array when visible, empty array when hidden.
+        # The bridge ignores empty arrays (no staleness-timer reset), so the
+        # GPS card will flip to NO after its 1 s timeout.
+        arr = TagDetectionArray()
+        arr.header.stamp = fp.header.stamp
+        if gps_visible:
+            det = TagDetection()
+            det.tag_id = GPS_TAG_ID
+            det.x      = GPS_TAG_X_M
+            det.y      = GPS_TAG_Y_M
+            det.theta  = 0.0
+            arr.detections = [det]
+        else:
+            arr.detections = []
+        self._gps_pub.publish(arr)
+
+        # ── Fake lidar (square room) ──────────────────────────────────────────
         xs, ys = [], []
         for i in range(LIDAR_RAYS):
             angle = rtheta + (i / LIDAR_RAYS) * 2.0 * math.pi
-            dx = math.cos(angle)
-            dy = math.sin(angle)
-
-            # Ray-box intersection: find t for each wall, take the nearest.
+            dx, dy = math.cos(angle), math.sin(angle)
             R = ROOM_HALF_SIZE_MM
             ts = []
             if abs(dx) > 1e-6:
                 ts += [(R - rx) / dx, (-R - rx) / dx]
             if abs(dy) > 1e-6:
                 ts += [(R - ry) / dy, (-R - ry) / dy]
-            t_hit = min(t for t in ts if t > 10.0)   # nearest wall in front
-
+            t_hit = min(t for t in ts if t > 10.0)
             jitter = random.uniform(-20.0, 20.0)
             xs.append(rx + dx * (t_hit + jitter))
             ys.append(ry + dy * (t_hit + jitter))
 
         lw = LidarWorldPoints()
-        lw.header.stamp = fp.header.stamp
-        lw.xs          = xs
-        lw.ys          = ys
-        lw.robot_x     = float(rx)
-        lw.robot_y     = float(ry)
-        lw.robot_theta = float(rtheta)
+        lw.header.stamp  = fp.header.stamp
+        lw.xs            = xs
+        lw.ys            = ys
+        lw.robot_x       = float(rx)
+        lw.robot_y       = float(ry)
+        lw.robot_theta   = float(rtheta)
         self._lidar_pub.publish(lw)
 
 
