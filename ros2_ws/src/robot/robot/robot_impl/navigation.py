@@ -967,8 +967,24 @@ class NavigationMixin:
         if timeout <= 0.0:
             return True
 
+        deadline = time.monotonic() + timeout
+        confirmed = False
+
+        # Firmware already schedules a response after /sys_odom_param_set, but
+        # startup ordering and bridge latency can still yield a stale or missed
+        # first echo. Re-query within the timeout window instead of treating the
+        # first miss as a hard failure.
         self.request_odometry_parameters()
-        confirmed = self._odom_confirm_event.wait(timeout=timeout)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            wait_slice = min(0.1, remaining)
+            if self._odom_confirm_event.wait(timeout=wait_slice):
+                confirmed = True
+                break
+            self.request_odometry_parameters()
+
         if not confirmed:
             self._node.get_logger().warning(
                 f"[robot] set_odometry_parameters: firmware did not confirm within "

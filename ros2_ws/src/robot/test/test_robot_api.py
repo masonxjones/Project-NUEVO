@@ -5,6 +5,7 @@ import math
 import numpy as np
 import sys
 import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -73,6 +74,13 @@ class FakeNode:
     def get_logger(self) -> FakeLogger:
         return self.logger
 
+    def get_clock(self):
+        return types.SimpleNamespace(
+            now=lambda: types.SimpleNamespace(
+                to_msg=lambda: types.SimpleNamespace()
+            )
+        )
+
 
 def _install_fake_robot_dependencies() -> None:
     rclpy = types.ModuleType("rclpy")
@@ -94,7 +102,12 @@ def _install_fake_robot_dependencies() -> None:
     bridge_interfaces_srv = types.ModuleType("bridge_interfaces.srv")
 
     def make_message(name: str):
-        return type(name, (), {})
+        class _Message:
+            def __init__(self) -> None:
+                self.header = types.SimpleNamespace(stamp=None)
+
+        _Message.__name__ = name
+        return _Message
 
     for name in [
         "DCEnable",
@@ -113,6 +126,8 @@ def _install_fake_robot_dependencies() -> None:
         "IOSetNeopixel",
         "SensorImu",
         "SensorKinematics",
+        "FusedPose",
+        "LidarWorldPoints",
         "ServoEnable",
         "ServoSet",
         "ServoStateAll",
@@ -133,6 +148,7 @@ def _install_fake_robot_dependencies() -> None:
         "SystemPower",
         "SystemState",
         "TagDetectionArray",
+        "VisionDetectionArray",
     ]:
         setattr(bridge_interfaces_msg, name, make_message(name))
 
@@ -377,6 +393,49 @@ class RobotApiTests(unittest.TestCase):
             timeout=0.05,
         )
         self.assertFalse(result)
+
+    def test_set_odometry_parameters_retries_until_matching_echo(self) -> None:
+        result_holder = []
+
+        def _call_set() -> None:
+            result_holder.append(
+                self.robot.set_odometry_parameters(
+                    left_motor_id=3,
+                    right_motor_id=4,
+                    timeout=0.3,
+                )
+            )
+
+        thread = threading.Thread(target=_call_set)
+        thread.start()
+        time.sleep(0.02)
+
+        self.robot._on_odom_param_rsp(types.SimpleNamespace(
+            wheel_diameter_mm=70.0,
+            wheel_base_mm=300.0,
+            initial_theta_deg=90.0,
+            left_motor_number=1,
+            left_motor_dir_inverted=False,
+            right_motor_number=2,
+            right_motor_dir_inverted=True,
+        ))
+
+        time.sleep(0.12)
+        params = self.robot.get_odometry_parameters()
+        self.robot._on_odom_param_rsp(types.SimpleNamespace(
+            wheel_diameter_mm=params["wheel_diameter_mm"],
+            wheel_base_mm=params["wheel_base_mm"],
+            initial_theta_deg=params["initial_theta_deg"],
+            left_motor_number=3,
+            left_motor_dir_inverted=params["left_motor_dir_inverted"],
+            right_motor_number=4,
+            right_motor_dir_inverted=params["right_motor_dir_inverted"],
+        ))
+
+        thread.join(timeout=1.0)
+        self.assertFalse(thread.is_alive(), "set_odometry_parameters did not unblock after retry")
+        self.assertEqual(result_holder, [True])
+        self.assertGreaterEqual(len(self.node.publishers["/sys_odom_param_req"].published), 2)
 
     def test_duplicate_odom_motor_pair_fails_fast(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be different"):
