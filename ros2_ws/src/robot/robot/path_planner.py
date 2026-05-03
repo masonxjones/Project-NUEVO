@@ -161,6 +161,8 @@ class APFPlanner:
         goal_tolerance: float = 20.0,
         attraction_gain: float = 1.0,
         heading_gain: float = 2.0,
+        force_ema_alpha: float = 0.35,
+        stop_dist: float = 80.0,
     ) -> None:
         self._max_linear  = max_linear
         self._max_angular = max_angular
@@ -169,6 +171,12 @@ class APFPlanner:
         self.goal_tolerance = goal_tolerance
         self._attr_gain   = attraction_gain
         self._heading_gain = heading_gain
+        self._force_alpha = float(force_ema_alpha)
+        self._stop_dist   = float(stop_dist)
+
+        # EMA state for force vector — persists across ticks to suppress oscillation
+        self._smooth_fx: float = 0.0
+        self._smooth_fy: float = 0.0
 
     def navigate_to_goal(
         self,
@@ -242,24 +250,34 @@ class APFPlanner:
                 choose_left = (left_tx * goal_ux + left_ty * goal_uy) >= (right_tx * goal_ux + right_ty * goal_uy)
                 tangent_x = np.where(choose_left, left_tx, right_tx)
                 tangent_y = np.where(choose_left, left_ty, right_ty)
-                tangent_mag = 0.75 * self._rep_gain * proximity * proximity
+                tangent_mag = 0.50 * self._rep_gain * proximity * proximity
                 tan_x = float(np.sum(tangent_mag * tangent_x))
                 tan_y = float(np.sum(tangent_mag * tangent_y))
 
                 nearest_boundary = float(np.min(boundary_dists[in_range]))
-                obstacle_scale = max(0.15, min(1.0, nearest_boundary / self._rep_range))
+                obstacle_scale = min(1.0, nearest_boundary / self._rep_range)
 
         force_x = attr_x + rep_x + tan_x
         force_y = attr_y + rep_y + tan_y
-        if math.hypot(force_x, force_y) < 1e-6:
+
+        # EMA on raw force vector to suppress tick-to-tick direction oscillation
+        self._smooth_fx = self._force_alpha * force_x + (1.0 - self._force_alpha) * self._smooth_fx
+        self._smooth_fy = self._force_alpha * force_y + (1.0 - self._force_alpha) * self._smooth_fy
+
+        if math.hypot(self._smooth_fx, self._smooth_fy) < 1e-6:
             return 0.0, 0.0
 
-        desired  = math.atan2(force_y, force_x)
+        desired  = math.atan2(self._smooth_fy, self._smooth_fx)
         ang_err  = (desired - theta + math.pi) % (2.0 * math.pi) - math.pi
 
         forward_scale = max(0.0, math.cos(ang_err))
         goal_scale    = min(1.0, dist_to_goal / max(2.0 * self.goal_tolerance, 1.0))
         linear  = self._max_linear * forward_scale * goal_scale * obstacle_scale
+
+        # Hard stop: within stop_dist of an obstacle surface, freeze forward motion.
+        # Angular is still allowed so the robot can steer clear before resuming.
+        if obstacle_scale < (self._stop_dist / max(self._rep_range, 1e-6)):
+            linear = 0.0
 
         angular = self._heading_gain * ang_err
         angular = max(-self._max_angular, min(self._max_angular, angular))
