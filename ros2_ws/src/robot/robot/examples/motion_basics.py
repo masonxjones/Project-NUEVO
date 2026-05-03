@@ -135,7 +135,9 @@ def start_robot(robot: Robot) -> None:
 
 def reset_mission_pose(robot: Robot) -> None:
     robot.reset_odometry()
-    robot.wait_for_pose_update(timeout=0.5)
+    if not robot.wait_for_odometry_reset(timeout=2.0):
+        print("[warn] odometry reset not confirmed within 2.0s; continuing with latest pose")
+        robot.wait_for_pose_update(timeout=0.5)
 
 
 def show_idle_leds(robot: Robot) -> None:

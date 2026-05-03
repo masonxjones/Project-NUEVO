@@ -516,6 +516,26 @@ class RobotApiTests(unittest.TestCase):
         next_handle = self.robot._start_nav(lambda: None, blocking=False, timeout=0.1)
         self.assertIsInstance(next_handle, self.robot_module.MotionHandle)
 
+    def test_nav_drive_straight_reverse_uses_same_heading_correction_sign(self) -> None:
+        self.robot._nav_cancel.clear()
+        poses = iter([
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, math.radians(10.0)),
+        ])
+        commands: list[tuple[float, float]] = []
+
+        self.robot._get_pose_mm = lambda: next(poses)
+        self.robot._send_body_velocity_mm = lambda linear, angular: commands.append((linear, angular))
+        self.robot._sleep_with_cancel = lambda _seconds: False
+        self.robot.stop = lambda: None
+
+        self.robot._nav_drive_straight(-500.0, 200.0, 20.0)
+
+        self.assertEqual(len(commands), 1)
+        linear, angular = commands[0]
+        self.assertLess(linear, 0.0)
+        self.assertLess(angular, 0.0)
+
     def test_purepursuit_follow_path_requires_waypoints(self) -> None:
         with self.assertRaisesRegex(ValueError, "must not be empty"):
             self.robot.purepursuit_follow_path(

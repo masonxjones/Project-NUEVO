@@ -838,9 +838,10 @@ class NavigationMixin:
             # Heading error: positive when robot has turned CCW from the initial heading
             heading_err = _wrap_angle(theta0_rad - theta_rad)
 
-            # For forward motion, correct CCW drift by turning CW (negative angular).
-            # For backward motion, flip the correction sense because the rear leads.
-            angular = direction * heading_kp * heading_err
+            # Use the same heading correction sign for forward and reverse travel.
+            # If the robot has drifted CCW from the launch heading, it should turn
+            # back CW regardless of whether it is moving forward or backward.
+            angular = heading_kp * heading_err
 
             # Decelerate smoothly within 3× tolerance, but keep enough speed to move.
             speed = min(velocity_mm, max(velocity_mm * 0.25, abs(remaining) * 2.0))
