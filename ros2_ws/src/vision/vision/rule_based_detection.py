@@ -9,13 +9,8 @@ from vision.model_utils import DetectedObject
 
 def detect_yellow_block(
     frame_bgr: np.ndarray,
-    *,
-    enabled: bool,
 ) -> tuple[list[DetectedObject], list[DebugOverlay]]:
     """Detect a simple yellow block and return detections plus debug contours."""
-    if not enabled:
-        return [], []
-
     detections: list[DetectedObject] = []
     debug_overlays: list[DebugOverlay] = []
 
@@ -24,8 +19,8 @@ def detect_yellow_block(
 
     # Yellow HSV range. These values were chosen to keep the example simple and
     # reasonably robust for bright classroom-colored yellow objects.
-    yellow_hsv_low = (18, 80, 80)
-    yellow_hsv_high = (40, 255, 255)
+    yellow_hsv_low = (20, 110, 80)
+    yellow_hsv_high = (38, 255, 255)
     mask = cv2.inRange(hsv, yellow_hsv_low, yellow_hsv_high)
 
     # Small open, then slightly larger close:
@@ -37,10 +32,10 @@ def detect_yellow_block(
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
 
     # Minimum blob size and compactness filter:
-    # - 800 px keeps tiny noise blobs out at 640x480
-    # - 0.35 fill ratio rejects very skinny or fragmented shapes
-    min_area_px = 800
-    min_fill_ratio = 0.35
+    # - 500 px allows partially-clipped blocks at the frame edge
+    # - 0.30 fill ratio allows partial/clipped bounding shapes
+    min_area_px = 500
+    min_fill_ratio = 0.30
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for contour in contours:

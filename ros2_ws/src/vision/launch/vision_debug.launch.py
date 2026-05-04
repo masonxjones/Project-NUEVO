@@ -23,7 +23,7 @@ def generate_launch_description() -> LaunchDescription:
                 package="vision",
                 executable="vision_node",
                 name="vision_node",
-                prefix=["nice", "-n", "10"],
+                prefix=["nice -n 10"],
                 output="screen",
                 parameters=[
                     COMMON_PARAMETERS,

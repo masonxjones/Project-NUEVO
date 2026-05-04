@@ -77,7 +77,6 @@ class VisionNode(Node):
         self.declare_parameter("max_detections", 20)
         self.declare_parameter("class_filter", DEFAULT_CLASS_FILTER)
         self.declare_parameter("ncnn_threads", 4)
-        self.declare_parameter("enable_rule_based_detection", False)
         self.declare_parameter("reconnect_delay_sec", 1.0)
         self.declare_parameter("log_interval_sec", 5.0)
         self.declare_parameter("debug_save_enabled", False)
@@ -99,9 +98,6 @@ class VisionNode(Node):
         self._max_detections = int(self.get_parameter("max_detections").value)
         self._class_filter = str(self.get_parameter("class_filter").value)
         self._ncnn_threads = int(self.get_parameter("ncnn_threads").value)
-        self._enable_rule_based_detection = bool(
-            self.get_parameter("enable_rule_based_detection").value
-        )
         self._reconnect_delay_sec = max(0.1, float(self.get_parameter("reconnect_delay_sec").value))
         self._log_interval_sec = max(1.0, float(self.get_parameter("log_interval_sec").value))
 
@@ -150,7 +146,7 @@ class VisionNode(Node):
                 self._class_filter or "all",
                 self._ncnn_threads if self._ncnn_threads > 0 else "auto",
                 self._confidence_threshold,
-                "on" if self._enable_rule_based_detection else "off",
+                "on",
             )
         )
 
@@ -158,7 +154,7 @@ class VisionNode(Node):
         return self._detector.predict(frame)
 
     def _detect_yellow_block(self, frame):
-        return detect_yellow_block(frame, enabled=self._enable_rule_based_detection)
+        return detect_yellow_block(frame)
 
     def _build_detection_msg(self, detected_object: DetectedObject) -> VisionDetection:
         detection = VisionDetection()
