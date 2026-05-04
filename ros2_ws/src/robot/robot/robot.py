@@ -9,7 +9,7 @@ from rclpy.node import Node
 
 import time as _time
 
-from robot.sensor_fusion import OrientationComplementaryFilter, PositionComplementaryFilter, SensorFusion
+from robot.sensor_fusion import GpsTangentOrientationFusion, OrientationComplementaryFilter, PositionComplementaryFilter, SensorFusion
 try:
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 except (ImportError, ModuleNotFoundError):

@@ -54,7 +54,7 @@ except (ImportError, ModuleNotFoundError):
         range_min = 0.0
         range_max = 0.0
 
-from robot.sensor_fusion import OrientationComplementaryFilter, SensorFusion
+from robot.sensor_fusion import GpsTangentOrientationFusion, OrientationComplementaryFilter, SensorFusion
 
 
 class SensorsMixin:
@@ -93,6 +93,35 @@ class SensorsMixin:
             '/sensor_imu',
             self._on_imu,
             10,
+        )
+
+    def enable_gps_tangent_heading(
+        self,
+        alpha: float = 0.15,
+        min_displacement_mm: float = 200.0,
+    ) -> None:
+        """Use GPS trajectory tangent for heading correction instead of IMU.
+
+        Installs a GpsTangentOrientationFusion strategy that derives a heading
+        reference from the direction of movement in the GPS-fused position.
+        Requires GPS to be enabled (enable_gps()) and takes effect once the
+        robot has moved at least min_displacement_mm with GPS fresh.
+
+        Mutually exclusive with enable_imu() — call one or the other, not both.
+
+        Parameters
+        ----------
+        alpha : float
+            Correction weight (0 = pure odometry, 1 = snap to GPS tangent).
+        min_displacement_mm : float
+            Minimum travel between tangent updates. Larger values are more
+            robust to GPS noise but correct drift less frequently.
+        """
+        self.set_orientation_fusion_strategy(
+            GpsTangentOrientationFusion(
+                alpha=alpha,
+                min_displacement_mm=min_displacement_mm,
+            )
         )
 
     def enable_vision(self) -> None:

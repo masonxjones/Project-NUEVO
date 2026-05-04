@@ -1,31 +1,12 @@
 """
 pure_pursuit.py — FSM-based pure-pursuit path following
 =======================================================
-Waypoint path following with the same `main.py`-style state loop used by the
-older reference example, but updated for the current Robot API.
-
-HOW TO RUN
-----------
 Copy this file over main.py, then restart the robot node:
 
     cp examples/pure_pursuit.py main.py
     ros2 run robot robot
 
-BTN_1 starts the path. BTN_2 cancels the active run and returns to IDLE.
-
-SENSOR TOGGLES
---------------
-Set these before running if the corresponding nodes are available:
-
-    ENABLE_LIDAR = False  →  True   requires `/scan`
-    ENABLE_GPS   = False  →  True   requires `/tag_detections`
-
-WHAT THIS TEACHES
------------------
-1. Pure-pursuit path following inside an FSM loop
-2. Optional lidar and GPS enable flow
-3. Non-blocking `MotionHandle` polling during motion
-4. Periodic status printing while the robot stays responsive to buttons
+BTN_1 starts the path. BTN_2 cancels and returns to IDLE.
 """
 
 from __future__ import annotations
@@ -57,21 +38,46 @@ from robot.robot import FirmwareState, Robot
 from robot.util import densify_polyline  # noqa: F401 - optional helper for students
 
 
-# Shared drive-base and lidar/GPS hardware calibration lives in
-# robot/hardware_map.py. If you need to change wheel geometry, wheel motors,
-# lidar mount, lidar self-filtering, or GPS tag body offset values, edit
-# ros2_ws/src/robot/robot/hardware_map.py. You can also just set those values
-# here locally if you want.
+# ---------------------------------------------------------------------------
+# Sensor toggles — set True if the corresponding node is running
+# Hardware calibration (wheel geometry, lidar mount, tag offset) lives in
+# robot/hardware_map.py.
+# ---------------------------------------------------------------------------
+
 ENABLE_LIDAR = False
+ENABLE_GPS   = False
 
-ENABLE_GPS = False
-
-# IMPORTANT: update TAG_ID to match your tag.
-TAG_ID = -1
+TAG_ID = -1  # IMPORTANT: set to the ArUco marker ID on your robot
 
 
 # ---------------------------------------------------------------------------
-# Configuration
+# GPS tuning (only used when ENABLE_GPS = True)
+#
+# GPS_POSITION_ALPHA     — how strongly each GPS fix pulls the fused position.
+#                          0.05 = smooth/slow, 0.10 = default, 0.30 = aggressive
+#
+# ENABLE_GPS_TANGENT_HEADING — derive heading from GPS trajectory instead of
+#                          IMU. Useful when IMU is unavailable. Set False and
+#                          call robot.enable_imu() to use IMU instead.
+#
+# GPS_TANGENT_ALPHA      — how strongly GPS tangent corrects odometry heading.
+#                          0.05 = gentle, 0.15 = default, 0.30 = aggressive
+#
+# GPS_TANGENT_MIN_DISPLACEMENT_MM — travel required before accepting a new
+#                          heading sample. 100 = responsive, 200 = default,
+#                          400 = noise-robust (for jittery GPS)
+#
+# To tune: watch θ_odom vs θ_fused in the status output while running.
+# ---------------------------------------------------------------------------
+
+GPS_POSITION_ALPHA           = 0.10
+ENABLE_GPS_TANGENT_HEADING   = True
+GPS_TANGENT_ALPHA            = 0.15
+GPS_TANGENT_MIN_DISPLACEMENT_MM = 200.0
+
+
+# ---------------------------------------------------------------------------
+# Pure pursuit configuration
 # ---------------------------------------------------------------------------
 
 PATH_CONTROL_POINTS = [
@@ -83,11 +89,11 @@ PATH_CONTROL_POINTS = [
 # Optional: densify long segments for smoother tracking.
 # PATH_CONTROL_POINTS = densify_polyline(PATH_CONTROL_POINTS, spacing=50.0)
 
-VELOCITY_MM_S = 150.0
-LOOKAHEAD_MM = 120.0
-TOLERANCE_MM = 25.0
-ADVANCE_RADIUS_MM = 80.0
-MAX_ANGULAR_RAD_S = 1.5
+VELOCITY_MM_S      = 150.0
+LOOKAHEAD_MM       = 120.0
+TOLERANCE_MM       = 25.0
+ADVANCE_RADIUS_MM  = 80.0
+MAX_ANGULAR_RAD_S  = 1.5
 
 STATUS_PRINT_INTERVAL_S = 0.5
 
@@ -123,7 +129,13 @@ def configure_robot(robot: Robot) -> None:
         robot.enable_gps()
         robot.set_tracked_tag_id(TAG_ID)
         robot.set_tag_body_offset(TAG_BODY_OFFSET_X_MM, TAG_BODY_OFFSET_Y_MM)
+        robot.set_position_fusion_alpha(GPS_POSITION_ALPHA)
         print(f"[sensor] GPS enabled — tracking ArUco tag {TAG_ID}")
+        if ENABLE_GPS_TANGENT_HEADING:
+            robot.enable_gps_tangent_heading(
+                alpha=GPS_TANGENT_ALPHA,
+                min_displacement_mm=GPS_TANGENT_MIN_DISPLACEMENT_MM,
+            )
 
 
 def start_robot(robot: Robot) -> None:
@@ -155,9 +167,9 @@ def print_status(robot: Robot) -> None:
     if ENABLE_GPS and robot.has_fused_pose():
         fx, fy, ftheta = robot.get_fused_pose()
         print(
-            f"  odom=({ox:6.0f}, {oy:6.0f}) mm  θ={otheta:5.1f}°  |  "
-            f"fused=({fx:6.0f}, {fy:6.0f}) mm  θ={ftheta:5.1f}°  "
-            f"(gps_fresh={robot.is_gps_active()})"
+            f"  odom=({ox:6.0f}, {oy:6.0f}) mm  θ_odom={otheta:5.1f}°  |  "
+            f"fused=({fx:6.0f}, {fy:6.0f}) mm  θ_fused={ftheta:5.1f}°  "
+            f"gps={'fresh' if robot.is_gps_active() else 'stale'}"
         )
     else:
         print(f"  odom=({ox:6.0f}, {oy:6.0f}) mm  θ={otheta:5.1f}°")
@@ -194,8 +206,8 @@ def run(robot: Robot) -> None:
             show_idle_leds(robot)
             print("[FSM] IDLE — press BTN_1 to start path, BTN_2 to cancel")
             print(
-                f"[CFG] velocity={VELOCITY_MM_S:.0f} mm/s lookahead={LOOKAHEAD_MM:.0f} mm "
-                f"tolerance={TOLERANCE_MM:.0f} mm advance_radius={ADVANCE_RADIUS_MM:.0f} mm"
+                f"[CFG] velocity={VELOCITY_MM_S:.0f} mm/s  lookahead={LOOKAHEAD_MM:.0f} mm  "
+                f"tolerance={TOLERANCE_MM:.0f} mm  advance_radius={ADVANCE_RADIUS_MM:.0f} mm"
             )
             if ENABLE_LIDAR:
                 print(
@@ -205,9 +217,18 @@ def run(robot: Robot) -> None:
                 )
             if ENABLE_GPS:
                 print(
-                    f"[CFG] gps tag_id={TAG_ID} tag_body=({TAG_BODY_OFFSET_X_MM:.0f}, "
-                    f"{TAG_BODY_OFFSET_Y_MM:.0f}) mm"
+                    f"[CFG] gps tag_id={TAG_ID}  "
+                    f"tag_body=({TAG_BODY_OFFSET_X_MM:.0f}, {TAG_BODY_OFFSET_Y_MM:.0f}) mm  "
+                    f"position_alpha={GPS_POSITION_ALPHA:.2f}"
                 )
+                if ENABLE_GPS_TANGENT_HEADING:
+                    print(
+                        f"[CFG] heading=gps_tangent  "
+                        f"alpha={GPS_TANGENT_ALPHA:.2f}  "
+                        f"min_displacement={GPS_TANGENT_MIN_DISPLACEMENT_MM:.0f} mm"
+                    )
+                else:
+                    print("[CFG] heading=imu")
             state = "IDLE"
 
         elif state == "IDLE":

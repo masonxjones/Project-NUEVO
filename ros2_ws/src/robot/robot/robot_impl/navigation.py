@@ -121,16 +121,17 @@ class NavigationMixin:
 
             linear_vel  = math.hypot(float(msg.vx), float(msg.vy))
             angular_vel = float(msg.v_theta)
+            gps_fresh = (
+                self._gps_last_time > 0.0
+                and (_time.monotonic() - self._gps_last_time) < self._gps_timeout_s
+            )
             self._fused_theta = self._orientation_fusion.update(
                 odom_theta  = msg.theta,
                 mag_heading = relative_ahrs,
                 linear_vel  = linear_vel,
                 angular_vel = angular_vel,
-            )
-
-            gps_fresh = (
-                self._gps_last_time > 0.0
-                and (_time.monotonic() - self._gps_last_time) < self._gps_timeout_s
+                fused_x     = self._fused_x_mm if gps_fresh else None,
+                fused_y     = self._fused_y_mm if gps_fresh else None,
             )
             gps_x = self._gps_x_mm if gps_fresh else None
             gps_y = self._gps_y_mm if gps_fresh else None
@@ -213,6 +214,8 @@ class NavigationMixin:
             self._fused_pose_available = False
             self._gps_last_time = 0.0
             self._pos_fusion.reset()
+            if hasattr(self._orientation_fusion, "reset"):
+                self._orientation_fusion.reset()
         msg = SysOdomReset()
         msg.flags = 0
         self._odom_pub.publish(msg)
