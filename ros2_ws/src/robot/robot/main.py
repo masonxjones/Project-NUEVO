@@ -1,313 +1,142 @@
-# from __future__ import annotations
-# import time
-
-# from robot.robot import FirmwareState, Robot, Unit
-# from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
-# from robot.util import densify_polyline
-# from robot.path_planner import PurePursuitPlanner
-# import math
-# import numpy as np
-
-
-# # ---------------------------------------------------------------------------
-# # Robot build configuration
-# # ---------------------------------------------------------------------------
-
-# TAG_ID = 26 # set aruco tag ID 11 
-# POSITION_UNIT = Unit.MM
-# WHEEL_DIAMETER = 76.2
-# WHEEL_BASE = 200
-# INITIAL_THETA_DEG = 90.0
-
-# LEFT_WHEEL_MOTOR = Motor.DC_M1
-# LEFT_WHEEL_DIR_INVERTED = False
-# RIGHT_WHEEL_MOTOR = Motor.DC_M2
-# RIGHT_WHEEL_DIR_INVERTED = True
-
-
-# def configure_robot(robot: Robot) -> None:
-#     robot.set_unit(POSITION_UNIT)
-#     robot.set_odometry_parameters(
-#         wheel_diameter=WHEEL_DIAMETER,
-#         wheel_base=WHEEL_BASE,
-#         initial_theta_deg=INITIAL_THETA_DEG,
-#         left_motor_id=LEFT_WHEEL_MOTOR,
-#         left_motor_dir_inverted=LEFT_WHEEL_DIR_INVERTED,
-#         right_motor_id=RIGHT_WHEEL_MOTOR,
-#         right_motor_dir_inverted=RIGHT_WHEEL_DIR_INVERTED,
-#     )
-#     robot.set_tracked_tag_id(TAG_ID) # set aruco tag ID as the tracked tag for localization
-
-
-# def show_idle_leds(robot: Robot) -> None:
-#     robot.set_led(LED.GREEN, 0)
-#     robot.set_led(LED.ORANGE, 255)
-
-
-# def show_moving_leds(robot: Robot) -> None:
-#     robot.set_led(LED.ORANGE, 0)
-#     robot.set_led(LED.GREEN, 255)
-
-
-# def start_robot(robot: Robot) -> None:
-#     robot.set_state(FirmwareState.RUNNING)
-#     robot.reset_odometry()
-#     robot.wait_for_pose_update(timeout=0.2)
-
-
-# def run(robot: Robot) -> None:
-#     configure_robot(robot)
-
-#     state = "INIT"
-#     drive_handle = None
-#     period = 1.0 / float(DEFAULT_FSM_HZ)
-#     print(f"FSM period: {period:.3f} seconds")
-#     next_tick = time.monotonic()
-
-#     while True:
-#         if state == "INIT":
-#             start_robot(robot)
-#             print("[FSM] INIT (odometry reset)")
-#             path_control_points = [ #Define your path control points here (x, y) in mm
-#                 (0.0, 0.0), # 1st point
-#                 (0.0, 500.0), # 2nd point
-#                 (500.0, 500.0), # 3rd point
-#                 (500.0, 0.0), # 4th point
-#                 (0.0, 0.0), # 5th point
-#             ]    
-#             # path1 = path_control_points
-#             path1 = densify_polyline(path_control_points, spacing=20.0)
-#             remaining_path = path1.copy() 
-#             # center lane
-#             # path_control_points = [
-#             #     (0.0,   0.0),
-#             #     (0.0, 2500.0),
-#             #     (1000.0, 2500.0),
-#             # ]
-#             # left lane
-#             path_control_points = [
-#                 (300.0,   0.0),
-#                 (300.0, 2500.0),
-#                 (1300.0, 2500.0),
-#             ]
-
-#             path = densify_polyline(path_control_points, spacing=400.0)
-
-#             robot._nav_follow_pp_path(
-#                 lookahead_distance=100.0,
-#                 max_linear_speed=140.0,
-#                 max_angular_speed=1.5,
-#                 goal_tolerance=20.0,
-#                 obstacles_range=450.0,
-#                 view_angle=math.radians(70.0),
-#                 safe_dist=250.0,
-#                 avoidance_delay=150,
-#                 alpha_Ld=0.7,
-#                 offset=270.0,
-#                 lane_width=500.0,
-#                 obstacle_avoidance=True,
-#                 x_L=300.0,
-#             )
-#             robot.planner.set_path(path)
-#             print("Path is ready, Entering IDLE state.")
-#             print("[FSM] IDLE - Press BTN_1 to enter MOVING state.")
-#             state = "IDLE"
-
-#         elif state == "IDLE":
-#             show_idle_leds(robot)
-#             robot._draw_lidar_obstacles()
-#             if robot.get_button(Button.BTN_1):
-#                 LOOKAHEAD_DIST = 50.0 # Lookahead distance in mm (adjust as needed)
-#                 planner1 = PurePursuitPlanner(
-#                     lookahead_dist=LOOKAHEAD_DIST, 
-#                     max_angular=4.0, # Max angular velocity in rad/s (adjust as needed)
-#                     goal_tolerance=10.0, # Distance in mm to consider the target reached (adjust as needed)
-#              )
-#                 print("Pure Pursuit Planner is initialized. Start Moving!")
-#                 print("Start Moving!")
-#                 print("[FSM] MOVING")
-#                 state = "MOVING"
-#             if robot.get_button(Button.BTN_2):
-#                 print("BTN_2 pressed. Stopping robot and saving trajectory.")
-#                 robot.shutdown()
-
-#         elif state == "MOVING":
-#             show_moving_leds(robot)
-            
-#             # Step 1: Get current pose
-#             current_x, current_y, current_theta_deg = robot.get_pose()
-
-#             # Step 2: Convert current_theta_deg to radians and store it in current_theta_rad variable.  
-#             current_theta_rad = math.radians(current_theta_deg)
-
-#             # Step 3: Use the _advance_remaining_path() function to update the remaining_path variable
-#             # by advancing it based on the current position (current_x, current_y) and an advance radius(20.0) mm.
-#             # This will take out the waypoints that are already passed (within 20mm of the current position),
-#             # effectively "advancing" the path as the robot moves.
-#             remaining_path = robot._advance_remaining_path(remaining_path, current_x, current_y, advance_radius_mm=LOOKAHEAD_DIST)
-
-#             # Step 4: Use the _lookahead_point() function to calculate the current pursuit point
-#             # in your path, defined as (current_pursuit_x, current_pursuit_y)
-#             current_pursuit_x, current_pursuit_y = planner1._lookahead_point(current_x, current_y, remaining_path)
-
-#             # Step 5: Use the compute_velocity() function of the PurePursuitPlanner
-#             # to calculate the linear and angular velocity commands
-#             v_lin, v_ang = planner1.compute_velocity((current_x, current_y, current_theta_rad),remaining_path,max_linear=140.0)
-
-#             # Step 6: Use the robot.set_velocity() function to send the velocity commands to the robot.
-#             robot.set_velocity(v_lin, v_ang)
-
-#             # Step 7: Check if the current target point is reached using the
-#             # CurrentTargetReached() function of the PurePursuitPlanner.
-#             # Just uncomment the following lines to enable the print statements.
-#             if planner1.CurrentTargetReached(current_pursuit_x, current_pursuit_y, current_x, current_y):
-#                 print("MOVING: Target reached! Stopping.")
-#                 robot.stop()
-#                 print("[FSM] IDLE")
-#                 state = "IDLE"
-#             else:   
-#             # Step 8: Print the current pose and current pursuit point to the console for debugging purposes.
-#             # Just uncomment the following lines to enable the print statements.
-#                 print(f"Current Pose: ({current_x:.1f}, {current_y:.1f}, {current_theta_deg:.1f} deg)")
-#                 print(f"Current Pursuit Point: ({current_pursuit_x:.1f}, {current_pursuit_y:.1f})")            
-            
-#             # if next_tick % 0.5 < period: # print every half second
-#             #     robot._draw_lidar_obstacles()
-#             #     print("Obstacle figure updated.")
-#             state = robot._nav_follow_pp_path_loop()
-
-#         # FSM refresh rate control
-#         next_tick += period
-#         sleep_s = next_tick - time.monotonic()
-#         if sleep_s > 0.0:
-#             time.sleep(sleep_s)
-#         else:
-#             next_tick = time.monotonic()
-
 from __future__ import annotations
 import time
 
-from robot.robot import FirmwareState, Robot, Unit
-from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
-from robot.util import densify_polyline
-from robot.path_planner import PurePursuitPlanner
-import math
-import numpy as np
-
+# Corrected hardware constants based on your hardware_map.py
+from robot.hardware_map import (
+    DEFAULT_FSM_HZ, LED, POSITION_UNIT,
+    WHEEL_DIAMETER, WHEEL_BASE, INITIAL_THETA_DEG,
+    LEFT_WHEEL_MOTOR, RIGHT_WHEEL_MOTOR,
+    LEFT_DIR_INVERTED, RIGHT_DIR_INVERTED  # Fixed these names
+)
+from robot.robot import FirmwareState, Robot
 
 # ---------------------------------------------------------------------------
-# Robot build configuration
+# Configuration
 # ---------------------------------------------------------------------------
+LED_BRIGHTNESS = 255
+LIGHT_HOLD_SEC = 2.0
+VISION_STALE_SEC = 3.0
+MIN_TRAFFIC_LIGHT_CONFIDENCE = 0.50
+DRIVE_SPEED_MM_S = 100.0 
 
-TAG_ID = 26 # set aruco tag ID 26 
-POSITION_UNIT = Unit.MM
-WHEEL_DIAMETER = 76.2
-WHEEL_BASE = 200
-INITIAL_THETA_DEG = 90.0
-
-LEFT_WHEEL_MOTOR = Motor.DC_M1
-LEFT_WHEEL_DIR_INVERTED = False
-RIGHT_WHEEL_MOTOR = Motor.DC_M2
-RIGHT_WHEEL_DIR_INVERTED = True
-
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def configure_robot(robot: Robot) -> None:
     robot.set_unit(POSITION_UNIT)
+    
+    # Task 4 Requirement: Set odometry parameters 
     robot.set_odometry_parameters(
         wheel_diameter=WHEEL_DIAMETER,
         wheel_base=WHEEL_BASE,
-        initial_theta_deg=INITIAL_THETA_DEG,
-        left_motor_id=LEFT_WHEEL_MOTOR,
-        left_motor_dir_inverted=LEFT_WHEEL_DIR_INVERTED,
-        right_motor_id=RIGHT_WHEEL_MOTOR,
-        right_motor_dir_inverted=RIGHT_WHEEL_DIR_INVERTED,
+        starting_theta_deg=INITIAL_THETA_DEG,
+        left_motor_channel=LEFT_WHEEL_MOTOR,
+        right_motor_channel=RIGHT_WHEEL_MOTOR,
+        left_motor_inverted=LEFT_DIR_INVERTED,
+        right_motor_inverted=RIGHT_DIR_INVERTED
     )
-    robot.set_tracked_tag_id(TAG_ID) # set aruco tag ID as the tracked tag for localization
-
-
-def show_idle_leds(robot: Robot) -> None:
-    robot.set_led(LED.GREEN, 0)
-    robot.set_led(LED.ORANGE, 255)
-
-
-def show_moving_leds(robot: Robot) -> None:
-    robot.set_led(LED.ORANGE, 0)
-    robot.set_led(LED.GREEN, 255)
+    
+    robot.enable_vision()
 
 
 def start_robot(robot: Robot) -> None:
+    current = robot.get_state()
+    if current in (FirmwareState.ESTOP, FirmwareState.ERROR):
+        robot.reset_estop()
     robot.set_state(FirmwareState.RUNNING)
-    robot.reset_odometry()
-    robot.wait_for_pose_update(timeout=0.2)
 
+
+def dim_all_leds(robot: Robot) -> None:
+    for led in (LED.RED, LED.GREEN, LED.BLUE, LED.ORANGE, LED.PURPLE):
+        robot.set_led(led, 0)
+
+
+def find_traffic_light_color(robot: Robot) -> str | None:
+    """Return the best recent red/green traffic-light result, or None."""
+    if not robot.is_vision_active(timeout_s=VISION_STALE_SEC):
+        return None
+
+    best_color = None
+    best_confidence = -1.0
+
+    for detection in robot.get_detections("traffic light"):
+        confidence = float(detection["confidence"])
+        if confidence < MIN_TRAFFIC_LIGHT_CONFIDENCE:
+            continue
+
+        attributes = detection.get("attributes", {})
+        color_attribute = attributes.get("color", {})
+        color = color_attribute.get("value")
+        if color not in ("red", "green"):
+            continue
+
+        if confidence > best_confidence:
+            best_confidence = confidence
+            best_color = str(color)
+
+    return best_color
+
+
+# ---------------------------------------------------------------------------
+# run() - entry point
+# ---------------------------------------------------------------------------
 
 def run(robot: Robot) -> None:
     configure_robot(robot)
 
     state = "INIT"
-    drive_handle = None
+    lights_off_at = 0.0
+    last_shown_color = None
+
     period = 1.0 / float(DEFAULT_FSM_HZ)
-    print(f"FSM period: {period:.3f} seconds")
     next_tick = time.monotonic()
 
     while True:
+        # -- INIT -----------------------------------------------------------
         if state == "INIT":
             start_robot(robot)
-            print("[FSM] INIT (odometry reset)")
-            # center lane
-            # path_control_points = [
-            #     (0.0,   0.0),
-            #     (0.0, 2500.0),
-            #     (1000.0, 2500.0),
-            # ]
-            # left lane
-            path_control_points = [
-                (300.0,   0.0),
-                (300.0, 2500.0),
-                (1300.0, 2500.0),
-            ]
+            dim_all_leds(robot)
+            print("[FSM] WATCHING - Green drives, Red/None stops")
+            state = "WATCHING"
 
-            path = densify_polyline(path_control_points, spacing=400.0)
+        # -- WATCHING -------------------------------------------------------
+        elif state == "WATCHING":
+            now = time.monotonic()
+            traffic_light_color = find_traffic_light_color(robot)
 
-            robot._nav_follow_pp_path(
-                lookahead_distance=100.0,
-                max_linear_speed=140.0,
-                max_angular_speed=1.5,
-                goal_tolerance=20.0,
-                obstacles_range=450.0,
-                view_angle=math.radians(70.0),
-                safe_dist=250.0,
-                avoidance_delay=150,
-                alpha_Ld=0.7,
-                offset=270.0,
-                lane_width=500.0,
-                obstacle_avoidance=True,
-                x_L=300.0,
-            )
-            robot.planner.set_path(path)
-            print("Path is ready, Entering IDLE state.")
-            print("[FSM] IDLE - Press BTN_1 to enter MOVING state.")
-            state = "IDLE"
+            if traffic_light_color == "green":
+                # Drive forward for Task 4
+                robot.set_velocity(DRIVE_SPEED_MM_S, 0.0) 
+                robot.set_led(LED.GREEN, LED_BRIGHTNESS)
+                robot.set_led(LED.RED, 0)
+                lights_off_at = now + LIGHT_HOLD_SEC
+                
+                if last_shown_color != "green":
+                    print("[VISION] Green light: Driving forward")
+                last_shown_color = "green"
 
-        elif state == "IDLE":
-            show_idle_leds(robot)
-            robot._draw_lidar_obstacles()
-            if robot.get_button(Button.BTN_1):
-                print("Start Moving!")
-                print("[FSM] MOVING")
-                state = "MOVING"
-            if robot.get_button(Button.BTN_2):
-                print("BTN_2 pressed. Stopping robot and saving trajectory.")
-                robot.shutdown()
+            elif traffic_light_color == "red":
+                # Stop for Task 4
+                robot.stop() 
+                robot.set_led(LED.RED, LED_BRIGHTNESS)
+                robot.set_led(LED.GREEN, 0)
+                lights_off_at = now + LIGHT_HOLD_SEC
+                
+                if last_shown_color != "red":
+                    print("[VISION] Red light: Stopping")
+                last_shown_color = "red"
 
-        elif state == "MOVING":
-            show_moving_leds(robot)
-            # if next_tick % 0.5 < period: # print every half second
-            #     robot._draw_lidar_obstacles()
-            #     print("Obstacle figure updated.")
-            state = robot._nav_follow_pp_path_loop()
+            elif lights_off_at > 0.0 and now >= lights_off_at:
+                # Stop if detection is lost
+                robot.stop()
+                dim_all_leds(robot)
+                lights_off_at = 0.0
+                if last_shown_color is not None:
+                    print("[VISION] No detection: Stopping & LEDs off")
+                last_shown_color = None
 
-        # FSM refresh rate control
+        # -- Tick-rate control ---------------------------------------------
         next_tick += period
         sleep_s = next_tick - time.monotonic()
         if sleep_s > 0.0:

@@ -45,7 +45,7 @@ services:
       # udev state lets stable symlinks such as /dev/rplidar resolve in-container.
       - /run/udev:/run/udev:ro
       # ROS workspace source — live from repo (edits take effect on restart).
-      - ../../ros2_ws/src:/ros2_ws/src:ro
+      - ../../ros2_ws/src:/ros2_ws/src:rw
       # Shared Python bridge runtime used by the ROS wrapper package.
       - ../../nuevo_ui/backend:/workspace/nuevo_bridge_source:ro
       # Writable runtime data for auth/users and future bridge state.
