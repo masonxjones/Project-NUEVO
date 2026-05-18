@@ -13,10 +13,10 @@ import numpy as np
 # Robot build configuration
 # ---------------------------------------------------------------------------
 
-TAG_ID = 11 # set aruco tag ID 11 
+TAG_ID = 26
 POSITION_UNIT = Unit.MM
-WHEEL_DIAMETER = 74.0
-WHEEL_BASE = 333.0
+WHEEL_DIAMETER = 76.2
+WHEEL_BASE = 238.76
 INITIAL_THETA_DEG = 90.0
 
 LEFT_WHEEL_MOTOR = Motor.DC_M1
@@ -53,7 +53,7 @@ def run(robot: Robot) -> None:
     start_robot(robot)
 
     state = "WAIT_FOR_GREEN"
-    print("[FSM] Monitoring active. Green drives, Red stops.")
+    print("[FSM] Monitoring active. Green drives, Red or Stop Sign holds.")
 
     period = 1.0 / float(DEFAULT_FSM_HZ)
     next_tick = time.monotonic()
@@ -65,6 +65,14 @@ def run(robot: Robot) -> None:
             robot.shutdown()
             break
 
+        # Check for any high-confidence stop signs in view
+        stop_sign_detected = False
+        for detection in robot.get_detections("stop sign"):
+            if float(detection.get("confidence", 0.0)) >= 0.50:
+                stop_sign_detected = True
+                break
+
+        # Check live camera stream detections for traffic lights
         traffic_light_color = None
         for detection in robot.get_detections("traffic light"):
             if float(detection.get("confidence", 0.0)) >= 0.50:
@@ -80,7 +88,8 @@ def run(robot: Robot) -> None:
             robot.set_led(LED.GREEN, 0)
             robot.set_led(LED.ORANGE, 255)
 
-            if traffic_light_color == "green":
+            # Move forward only if green light is visible AND no stop sign is blocking the way
+            if traffic_light_color == "green" and not stop_sign_detected:
                 print("[VISION] Green light detected! Driving forward.")
                 state = "DRIVING"
 
@@ -89,8 +98,12 @@ def run(robot: Robot) -> None:
             robot.set_led(LED.ORANGE, 0)
             robot.set_velocity(100.0, 0.0)
 
+            # Stop moving if a red light is seen OR a stop sign appears in view
             if traffic_light_color == "red":
                 print("[VISION] Red light detected! Stopping.")
+                state = "WAIT_FOR_GREEN"
+            elif stop_sign_detected:
+                print("[VISION] Stop sign detected! Stopping.")
                 state = "WAIT_FOR_GREEN"
 
         next_tick += period
