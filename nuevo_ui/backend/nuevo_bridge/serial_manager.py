@@ -131,6 +131,7 @@ class SerialManager:
         # field is True only when both are True.
         self._last_valid_rx_time: float = 0.0   # monotonic; 0 = never received
         self._arduino_data_ok: bool = False
+        self._data_silent_since: float = 0.0    # monotonic; when silence began
 
     # ------------------------------------------------------------------
     # ROS2 integration hook
@@ -160,6 +161,9 @@ class SerialManager:
             )
             self.connected = True
             self.stats["connected"] = True
+            self._last_valid_rx_time = 0.0
+            self._arduino_data_ok = False
+            self._data_silent_since = time.monotonic()  # start silence clock at connect
             self.message_router.handle_transport_connection_change(True)
             print(f"[Serial] Connected to {SERIAL_PORT} @ {SERIAL_BAUD} baud")
             return True
@@ -189,6 +193,7 @@ class SerialManager:
         self._last_valid_rx_time = now_mono
         if not self._arduino_data_ok:
             self._arduino_data_ok = True
+            self._data_silent_since = 0.0
             self.message_router.handle_transport_connection_change(True)
             if self._asyncio_loop:
                 asyncio.run_coroutine_threadsafe(
@@ -370,7 +375,8 @@ class SerialManager:
 
         print("[Serial] Manager started (reader thread is hardware-driven).")
 
-        ARDUINO_DATA_TIMEOUT = 0.500  # seconds
+        ARDUINO_DATA_TIMEOUT = 0.500  # seconds — UI shows disconnected after this
+        ARDUINO_RECONNECT_DELAY = 5.0  # seconds — port closed/reopened after this
 
         try:
             while self._running:
@@ -390,8 +396,29 @@ class SerialManager:
                         f"{ARDUINO_DATA_TIMEOUT * 1000:.0f} ms"
                     )
                     self._arduino_data_ok = False
+                    self._data_silent_since = now_mono
                     self.message_router.handle_transport_connection_change(False)
                     await self._broadcast_stats()
+
+                # ── Port-level reconnect after extended silence ──────────────
+                # Close and reopen the port so the reader thread retries the
+                # handshake. This recovers from Arduino boot-loops and from
+                # cases where the Arduino restarts after a Pi power-cycle.
+                if (self.connected
+                        and not self._arduino_data_ok
+                        and self._data_silent_since > 0
+                        and now_mono - self._data_silent_since > ARDUINO_RECONNECT_DELAY):
+                    print("[Serial] No data for "
+                          f"{ARDUINO_RECONNECT_DELAY:.0f}s — closing port to reconnect")
+                    self._data_silent_since = 0.0
+                    self.connected = False
+                    self.stats["connected"] = False
+                    if self.ser:
+                        try:
+                            self.ser.close()
+                        except Exception:
+                            pass
+                        self.ser = None
 
                 if now - self.last_stats_time >= STATS_INTERVAL:
                     await self._broadcast_stats()

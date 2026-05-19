@@ -3,13 +3,11 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    return LaunchDescription(
-        [
-            Node(
-                package="robot",
-                executable="robot",
-                name="robot",
-                output="screen",
-            )
-        ]
-    )
+    return LaunchDescription([
+        Node(
+            package="robot",
+            executable="robot",
+            name="robot",
+            output="screen",
+        ),
+    ])

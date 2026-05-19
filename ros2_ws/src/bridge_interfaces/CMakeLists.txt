@@ -6,6 +6,18 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 
 set(msg_files
+  # Global GPS / field localizer
+  "msg/TagDetection.msg"
+  "msg/TagDetectionArray.msg"
+  # Fused localisation and lidar output
+  "msg/FusedPose.msg"
+  "msg/LidarWorldPoints.msg"
+  "msg/TrackedObstacle.msg"
+  "msg/TrackedObstacleArray.msg"
+  "msg/VirtualTarget.msg"
+  # Vision detections
+  "msg/VisionDetection.msg"
+  "msg/VisionDetectionArray.msg"
   # Raw bridge telemetry
   "msg/SystemState.msg"
   "msg/SystemPower.msg"

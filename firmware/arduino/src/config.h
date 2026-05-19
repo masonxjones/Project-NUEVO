@@ -19,7 +19,7 @@
 // FIRMWARE VERSION
 // ============================================================================
 
-#define FIRMWARE_VERSION        0x00090800  // Version 0.9.8
+#define FIRMWARE_VERSION        0x00090900  // Version 0.9.9
 #define TLV_PROTOCOL_VERSION_MAJOR 4
 #define TLV_PROTOCOL_VERSION_MINOR 0
 #define BOARD_REVISION          0       // 0 = unspecified / unknown
@@ -114,8 +114,8 @@
 // Set to 1 to invert encoder count direction (flips positive/negative)
 #define ENCODER_1_DIR_INVERTED  0       // 0=normal, 1=inverted
 #define ENCODER_2_DIR_INVERTED  0       // 0=normal, 1=inverted
-#define ENCODER_3_DIR_INVERTED  1       // 0=normal, 1=inverted
-#define ENCODER_4_DIR_INVERTED  1       // 0=normal, 1=inverted
+#define ENCODER_3_DIR_INVERTED  0       // 0=normal, 1=inverted
+#define ENCODER_4_DIR_INVERTED  0       // 0=normal, 1=inverted
 
 // ============================================================================
 // ROBOT GEOMETRY — edit these to match your robot
@@ -254,7 +254,7 @@ extern Print &DEBUG_SERIAL;
 // ============================================================================
 
 // IMU (ICM-20948 via SparkFun library + Fusion AHRS)
-#define IMU_ENABLED             0
+#define IMU_ENABLED             1
 // AD0_VAL: 0 = I2C addr 0x68 (AD0 pin LOW), 1 = I2C addr 0x69 (AD0 pin HIGH)
 #define IMU_AD0_VAL             1       // SparkFun breakout default: AD0 high = 0x69
 // Explicit IMU full-scale settings. Keep these aligned with FusionWrapper and
