@@ -327,6 +327,12 @@ bool MessageCenter::appendTelemetryTlv(uint16_t tlvType, uint16_t tlvLen, const 
     return true;
 }
 
+void handleBurgerPickCommand(uint16_t targetSteps) {
+    StepperManager::setTargetPosition(0, targetSteps);
+    StepperManager::setTargetPosition(1, targetSteps);
+    g_startGripperRoutine = true;
+}
+
 bool MessageCenter::sendFrame()
 {
     // Only send if at least one TLV was appended
