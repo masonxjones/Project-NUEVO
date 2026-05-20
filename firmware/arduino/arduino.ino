@@ -41,7 +41,35 @@
 
 #include <util/atomic.h>
 #include <string.h>
+// --- PIN DEFINITIONS ---
+#define PIN_BAT_VOLTAGE A0       // Battery voltage monitoring
+#define PIN_RAIL_VOLTAGE A1      // Main rail voltage
+#define PIN_SERVO_VOLTAGE A2     // Servo rail voltage
+#define PIN_GRIPPER_RESISTANCE A3 // Using A3 since A0-A2 are taken
 
+// --- GRIPPER CONFIGURATION ---
+#define SERVO_CLAW_CHANNEL 0
+#define SERVO_MIN_GRIP_PULSE 150
+#define SERVO_MAX_SAFE_SQUEEZE 350
+#define RESISTANCE_THRESHOLD 500 // Adjust based on your analog sensor readings
+
+// --- GRIPPER STATE MACHINE VARIABLES ---
+enum GripperState {
+    GRIP_IDLE,
+    GRIP_WAIT_FOR_HEIGHT,
+    GRIP_SQUEEZING,
+    GRIP_HOLDING
+};
+
+GripperState gripperState = GRIP_IDLE;
+bool g_startGripperRoutine = false;
+uint16_t currentServoPulse = 150;
+
+// --- UPDATED SENSOR FUNCTION ---
+uint16_t readGripperResistance() {
+    // Now safely reading from A3 instead of A0
+    return analogRead(PIN_GRIPPER_RESISTANCE); 
+}
 // ============================================================================
 // INCLUDES
 // ============================================================================
@@ -569,46 +597,6 @@ void taskUART() {
   digitalWrite(DEBUG_PIN_UART_TASK, LOW);
 #endif
 }
-// ============================================================================
-// SOFT TASK - taskGripper
-// ============================================================================
-bool g_startGripperRoutine = false;
-enum GripperState { GRIP_IDLE, GRIP_WAIT_FOR_HEIGHT, GRIP_SQUEEZING, GRIP_HOLDING };
-GripperState gripperState = GRIP_IDLE;
-
-uint16_t currentServoPulse = SERVO_MIN_GRIP_PULSE;
-
-void taskSafety() {
-  SafetyManager::check();
-  switch(gripperState){
-    case GRIP_IDLE:
-      if (g_startGripperRoutine) {
-       g_startGripperRoutine = false;
-       gripperState = GRIP_WAIT_FOR_HEIGHT;
-    }
-    break;
-
-    case GRIP_WAIT_FOR_HEIGHT:
-      if(StepperManager::isReady(0) && StepperManager::isReady(1)) {
-          currentServoPulse = SERVO_MIN_GRIP_PULSE;
-          gripperState = GRIP_SQUEEZING;
-    }
-    break;
-
-    case GRIP_SQUEEZING:
-      currentServoPulse += 2;
-      ServoController::setPWM(SERVO_CLAW_CHANNEL, 0, currentServoPulse);
-
-      if (readGripperResistance() >= RESISTANCE_THRESHOLD || currentServoPulse >= SERVO_MAX_SAFE_SQUEEZE){
-        gripperState = GRIP_HOLDING;
-        MessageCenter::sendPickCompleteNotification();
-      }
-    break;
-
-    case GRIP_HOLDING:
-      break;
-  }
-}
 
 // ============================================================================
 // SOFT TASK — taskSafety (100 Hz, millis-based)
@@ -1016,6 +1004,11 @@ void setup() {
   UserIO::syncOutputs();
   Utility::printStartupSummary();
   DebugLog::setPassthrough(false);
+}
+
+uint16_t readGripperResistance() {
+    // Replace A0 with your actual sensor pin
+    return analogRead(A0); 
 }
 
 // ============================================================================
