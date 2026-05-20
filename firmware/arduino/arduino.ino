@@ -569,6 +569,46 @@ void taskUART() {
   digitalWrite(DEBUG_PIN_UART_TASK, LOW);
 #endif
 }
+// ============================================================================
+// SOFT TASK - taskGripper
+// ============================================================================
+bool g_startGripperRoutine = false;
+enum GripperState { GRIP_IDLE, GRIP_WAIT_FOR_HEIGHT, GRIP_SQUEEZING, GRIP_HOLDING };
+GripperState gripperState = GRIP_IDLE;
+
+uint16_t currentServoPulse = SERVO_MIN_GRIP_PULSE;
+
+void taskSafety() {
+  SafetyManager::check();
+  switch(gripperState){
+    case GRIP_IDLE:
+      if (g_startGripperRoutine) {
+       g_startGripperRoutine = false;
+       gripperState = GRIP_WAIT_FOR_HEIGHT;
+    }
+    break;
+
+    case GRIP_WAIT_FOR_HEIGHT:
+      if(StepperManager::isReady(0) && StepperManager::isReady(1)) {
+          currentServoPulse = SERVO_MIN_GRIP_PULSE;
+          gripperState = GRIP_SQUEEZING;
+    }
+    break;
+
+    case GRIP_SQUEEZING:
+      currentServoPulse += 2;
+      ServoController::setPWM(SERVO_CLAW_CHANNEL, 0, currentServoPulse);
+
+      if (readGripperResistance() >= RESISTANCE_THRESHOLD || currentServoPulse >= SERVO_MAX_SAFE_SQUEEZE){
+        gripperState = GRIP_HOLDING;
+        MessageCenter::sendPickCompleteNotification();
+      }
+    break;
+
+    case GRIP_HOLDING:
+      break;
+  }
+}
 
 // ============================================================================
 // SOFT TASK — taskSafety (100 Hz, millis-based)
