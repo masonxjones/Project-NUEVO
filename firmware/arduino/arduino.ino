@@ -1028,4 +1028,21 @@ void loop() {
   serviceControlFirstFastLaneBurst();
   servicePeriodicBurst();
   serviceControlFirstFastLaneBurst();
+  // ============================================================================
+  // EMERGENCY GRIPPER DIRECT HARDWARE TEST (Paste at the very bottom of setup)
+  // ============================================================================
+  DEBUG_SERIAL.println(F("[TEST] Activating direct gripper test sequence..."));
+ 
+  // 1. Force the claw open
+  ServoController::setPWM(0, 0, 150);
+  delay(1000);
+ 
+  // 2. Step-by-step raw sweep to test movement
+  for (uint16_t pulse = 150; pulse < 350; pulse += 5) {
+      ServoController::setPWM(0, 0, pulse); // Channel 0
+      delay(30); // Short visible delay for testing ONLY in setup
+  }
+ 
+  DEBUG_SERIAL.println(F("[TEST] Direct sweep complete. Entering main loop..."));
 }
+
