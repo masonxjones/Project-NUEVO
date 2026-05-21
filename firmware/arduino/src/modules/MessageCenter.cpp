@@ -29,6 +29,8 @@
 #include <math.h>
 #include <string.h>
 
+extern bool g_startGripperRoutine;
+
 // External references to motor arrays (defined in arduino.ino)
 extern DCMotor dcMotors[NUM_DC_MOTORS];
 
@@ -325,8 +327,8 @@ bool MessageCenter::appendTelemetryTlv(uint16_t tlvType, uint16_t tlvLen, const 
 }
 
 void handleBurgerPickCommand(uint16_t targetSteps) {
-    StepperManager::setTargetPosition(0, targetSteps);
-    StepperManager::setTargetPosition(1, targetSteps);
+    StepperManager::setTargetSteps(0, targetSteps);
+    StepperManager::setTargetSteps(1, targetSteps);
     g_startGripperRoutine = true;
 }
 
