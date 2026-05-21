@@ -31,7 +31,7 @@ CLASSES_OF_INTEREST = [
     "stop sign",
     "person",
     # "car",
-    # "bus",
+    # "bus",BD
 ]
 
 DEFAULT_CLASS_FILTER = ",".join(CLASSES_OF_INTEREST)

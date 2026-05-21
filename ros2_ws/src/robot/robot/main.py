@@ -27,7 +27,7 @@ RIGHT_WHEEL_DIR_INVERTED = True
 
 def configure_robot(robot: Robot) -> None:
     robot.set_unit(POSITION_UNIT)
-    
+   
     robot.set_odometry_parameters(
         wheel_diameter=WHEEL_DIAMETER,
         wheel_base=WHEEL_BASE,
@@ -38,7 +38,8 @@ def configure_robot(robot: Robot) -> None:
         right_motor_dir_inverted=RIGHT_WHEEL_DIR_INVERTED,
     )
     robot.set_tracked_tag_id(TAG_ID)
-    
+   
+    # Keeps vision tracking subscriber active
     robot.enable_vision()
 
 
@@ -50,13 +51,18 @@ def start_robot(robot: Robot) -> None:
 
 def run(robot: Robot) -> None:
     configure_robot(robot)
-    start_robot(robot)
 
-    state = "WAIT_FOR_GREEN"
-    print("[FSM] Monitoring active. Green drives, Red or Stop Sign holds.")
+    state = "INIT"
+    print("[FSM] Starting full Autonomous Navigation System.")
 
     period = 1.0 / float(DEFAULT_FSM_HZ)
     next_tick = time.monotonic()
+   
+    # Global tracking variables for the navigation system
+    path_points = []
+    remaining_path = []
+    planner1 = None
+    LOOKAHEAD_DIST = 100.0  # Lookahead distance in mm
 
     while True:
         if robot.get_button(Button.BTN_2):
@@ -83,29 +89,93 @@ def run(robot: Robot) -> None:
                     traffic_light_color = color
                     break
 
-        if state == "WAIT_FOR_GREEN":
+        # -- STATE 1: INITIALIZE THE MAP PATH --
+        if state == "INIT":
+            start_robot(robot)
+           
+            # Example: 61cm x 61cm square trajectory mapping (Task 3 requirement)
+            path_control_points = [
+                (0.0, 0.0),
+                (0.0, 610.0),
+                (610.0, 610.0),
+                (610.0, 0.0),
+                (0.0, 0.0)
+            ]
+           
+            # Subdivide and densify the map coordinate list
+            path_points = densify_polyline(path_control_points, spacing=20.0)
+            remaining_path = path_points.copy()
+           
+            # Initialize the tracking geometry class parameters
+            planner1 = PurePursuitPlanner(
+                lookahead_dist=LOOKAHEAD_DIST,
+                max_angular=1.5,
+                goal_tolerance=20.0
+            )
+           
+            print("[FSM] Path compiled and planner calibrated. Swapping to standby.")
+            state = "WAIT_FOR_GREEN"
+
+        # -- STATE 2: STANDBY AT A COMPLETE STOP --
+        elif state == "WAIT_FOR_GREEN":
             robot.stop()
             robot.set_led(LED.GREEN, 0)
             robot.set_led(LED.ORANGE, 255)
 
-            # Move forward only if green light is visible AND no stop sign is blocking the way
+            # Only enter driving routine if path is cleared and light is green
             if traffic_light_color == "green" and not stop_sign_detected:
-                print("[VISION] Green light detected! Driving forward.")
+                print("[VISION] Path cleared with green light! Beginning pure pursuit tracking.")
                 state = "DRIVING"
 
+        # -- STATE 3: PURE PURSUIT PATH NAVIGATION LOOP --
         elif state == "DRIVING":
             robot.set_led(LED.GREEN, 255)
             robot.set_led(LED.ORANGE, 0)
-            robot.set_velocity(100.0, 0.0)
 
-            # Stop moving if a red light is seen OR a stop sign appears in view
+            # Interrupt movement instantly if a stop condition arises
             if traffic_light_color == "red":
-                print("[VISION] Red light detected! Stopping.")
+                print("[VISION] Red light encountered! Halting path tracking.")
                 state = "WAIT_FOR_GREEN"
+                continue
             elif stop_sign_detected:
-                print("[VISION] Stop sign detected! Stopping.")
+                print("[VISION] Stop sign encountered! Halting path tracking.")
                 state = "WAIT_FOR_GREEN"
+                continue
 
+            # --- PROCESS PURE PURSUIT CALCULATIONS ---
+            # Step 1: Read actual position and direction angle from map nodes
+            current_x, current_y, current_theta_deg = robot.get_pose()
+            current_theta_rad = math.radians(current_theta_deg)
+
+            # Step 2: Clear passed target waypoints out of the active array buffer
+            remaining_path = robot._advance_remaining_path(
+                remaining_path, current_x, current_y, advance_radius_mm=LOOKAHEAD_DIST
+            )
+
+            # Step 3: Check if we have run out of waypoints (Completed the square track)
+            if not remaining_path or len(remaining_path) == 0:
+                print("[NAV] Destination reached! No remaining waypoints left.")
+                robot.stop()
+                state = "WAIT_FOR_GREEN"
+                # Reset path tracking so it can be triggered to run again if needed
+                remaining_path = path_points.copy()
+                continue
+
+            # Step 4: Resolve optimal directional velocity adjustments
+            # PurePursuitPlanner maps lookahead values internally using remaining_path
+            linear_velocity_cmd, angular_velocity_cmd_rad_s = planner1.compute_velocity(
+                pose=(current_x, current_y, current_theta_rad),
+                waypoints=remaining_path,
+                max_linear=80.0
+            )
+
+            # Step 5: Command internal motor controller dynamically
+            robot.set_velocity(
+                linear_velocity_cmd,
+                math.degrees(angular_velocity_cmd_rad_s)
+            )
+
+        # Loop timing constraints
         next_tick += period
         sleep_s = next_tick - time.monotonic()
         if sleep_s > 0.0:
