@@ -852,6 +852,23 @@ void setup() {
     DEBUG_SERIAL.println(F("  - PCA9685 initialized (50Hz PWM)"));
   } else {
     DEBUG_SERIAL.println(F("  - PCA9685 not detected"));
+    // ... [existing setup code] ...
+  
+  Utility::printStartupSummary();
+  DebugLog::setPassthrough(false);
+
+  
+  DEBUG_SERIAL.println(F("[TEST] Activating direct gripper test sequence..."));
+  ServoController::setPositionDeg(0, 0, 150); // Force the claw open [cite: 447]
+  delay(1000);
+
+  for (uint16_t pulse = 150; pulse < 350; pulse += 5) {
+    ServoController::setPositionDeg(0, 0, pulse); // Channel 0 raw sweep [cite: 448, 449]
+    delay(30); 
+  }
+  DEBUG_SERIAL.println(F("[TEST] Direct sweep complete."));
+  // ============================================
+  }
   }
 #endif
 
@@ -998,7 +1015,7 @@ void setup() {
   DEBUG_SERIAL.println(F("[Setup] Starting hard real-time ISRs (Timer1 + Timer3; Timer2/Timer4 PWM)..."));
   noInterrupts();
   ISRScheduler::configureTimer1DcSlotISR();
-  ISRScheduler::configureTimer2PwmOnly();
+  // ISRScheduler::configureTimer2PwmOnly();
   ISRScheduler::configureTimer4PwmOnly();
   interrupts();
   UserIO::syncOutputs();
@@ -1006,10 +1023,6 @@ void setup() {
   DebugLog::setPassthrough(false);
 }
 
-uint16_t readGripperResistance() {
-    // Replace A0 with your actual sensor pin
-    return analogRead(A0); 
-}
 
 // ============================================================================
 // ARDUINO MAIN LOOP
@@ -1027,12 +1040,12 @@ void loop() {
   DEBUG_SERIAL.println(F("[TEST] Activating direct gripper test sequence..."));
  
   // 1. Force the claw open
-  ServoController::setPWM(0, 0, 150);
+  ServoController::setPositionDeg(0, 0, 150);
   delay(1000);
  
   // 2. Step-by-step raw sweep to test movement
   for (uint16_t pulse = 150; pulse < 350; pulse += 5) {
-      ServoController::setPWM(0, 0, pulse); // Channel 0
+      ServoController::setPositionDeg(0, 0, pulse); // Channel 0
       delay(30); // Short visible delay for testing ONLY in setup
   }
  
