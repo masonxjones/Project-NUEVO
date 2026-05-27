@@ -327,8 +327,8 @@ bool MessageCenter::appendTelemetryTlv(uint16_t tlvType, uint16_t tlvLen, const 
 }
 
 void handleBurgerPickCommand(uint16_t targetSteps) {
-    StepperManager::setTargetSteps(0, targetSteps);
-    StepperManager::setTargetSteps(1, targetSteps);
+    // StepperManager::setTargetSteps(0, targetSteps);
+  //   StepperManager::setTargetSteps(1, targetSteps);
     g_startGripperRoutine = true;
 }
 
