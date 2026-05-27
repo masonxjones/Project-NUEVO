@@ -3,7 +3,7 @@ import time
 
 # --- CONFIGURATION ---
 # Replace with your actual port (e.g., 'COM3' for Windows, '/dev/ttyACM0' for Linux)
-SERIAL_PORT = '/dev/ttyS7'  
+SERIAL_PORT = 'COM7'
 BAUD_RATE = 115200
 
 def send_tlv_command(ser, msg_type, payload_bytes):
