@@ -870,11 +870,11 @@ void setup() {
   // ====== EMERGENCY GRIPPER DIRECT HARDWARE TEST =======
   DEBUG_SERIAL.println(F("[TEST] Activating direct gripper test sequence..."));
 
-  ServoController::setPositionDeg(0, 0, 150);
+  ServoController::setPWM(0, 0, 150);
   delay(1000);
 
   for (uint16_t pulse = 150; pulse < 350; pulse += 5) {
-    ServoController::setPositionDeg(0, 0, pulse); 
+    ServoController::setPWM(0, 0, pulse); 
     delay(30); 
   }
   DEBUG_SERIAL.println(F("[TEST] Direct sweep complete. Entering loop..."));
