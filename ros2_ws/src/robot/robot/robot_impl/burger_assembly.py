@@ -166,7 +166,7 @@ class BurgerAssemblyMixin:
     def _step_enable(self, stepper: int, enable: bool) -> None:
         msg = StepEnable()
         msg.stepper_number = stepper
-        msg.enable = 1 if enable else 0
+        msg.enable = bool(enable)
         self._step_en_pub.publish(msg)
 
     def _step_move_abs(self, stepper: int, target_steps: int) -> None:

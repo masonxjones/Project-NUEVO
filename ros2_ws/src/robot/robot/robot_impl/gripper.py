@@ -38,8 +38,8 @@ from bridge_interfaces.msg import ServoEnable, ServoSet, StepEnable, StepMove
 
 # ── Defaults (tune to your servo) ────────────────────────────────────────────
 GRIPPER_CHANNEL       = 16       # 1-based public API channel (firmware ch 15)
-GRIPPER_OPEN_US       = 1000     # pulse width µs → claw open
-GRIPPER_CLOSED_US     = 2000     # pulse width µs → claw fully closed
+GRIPPER_OPEN_US       = 900     # pulse width µs → claw open
+GRIPPER_CLOSED_US     = 1600     # pulse width µs → claw fully closed
 GRIPPER_SQUEEZE_STEP  = 20       # µs per squeeze increment
 GRIPPER_SQUEEZE_DELAY = 0.03     # seconds between increments
 GRIPPER_RESISTANCE_PIN = 3       # analog pin index (A3 on the Arduino)
@@ -57,7 +57,7 @@ class GripperMixin:
 
     # ── Low-level servo helpers ───────────────────────────────────────────────
 
-    def _servo_channel_to_firmware(self, channel: int) -> int:
+    def _servo_channel_to_firmware(self, channel: bool) -> bool:
         """Convert 1-based public channel to 0-based firmware channel."""
         return channel - 1
 
@@ -65,14 +65,14 @@ class GripperMixin:
         """Enable a servo channel (must be called before set)."""
         msg = ServoEnable()
         msg.channel = self._servo_channel_to_firmware(channel)
-        msg.enable = 1
+        msg.enable = bool(True)
         self._srv_en_pub.publish(msg)
 
     def disable_servo(self, channel: int = GRIPPER_CHANNEL) -> None:
         """Disable a servo channel (servo goes limp — no holding torque)."""
         msg = ServoEnable()
         msg.channel = self._servo_channel_to_firmware(channel)
-        msg.enable = 0
+        msg.enable = bool(False)
         self._srv_en_pub.publish(msg)
 
     def set_servo_pulse(self, channel: int, pulse_us: int) -> None:
@@ -271,7 +271,7 @@ class GripperMixin:
     def _publish_step_enable(self, stepper: int, enable: bool) -> None:
         msg = StepEnable()
         msg.stepper_number = stepper
-        msg.enable = 1 if enable else 0
+        msg.enable = bool(enable)
         self._step_en_pub.publish(msg)
 
     def _publish_step_move_absolute(self, stepper: int, target_steps: int) -> None:
@@ -286,38 +286,30 @@ class GripperMixin:
         self._step_mv_pub.publish(msg)
 
     def _wait_for_stepper_idle(
-        self,
-        stepper: int,
-        timeout_s: float = 10.0,
-        poll_interval_s: float = 0.05,
+       self,
+       stepper: int,
+       timeout_s: float = 10.0,
+       poll_interval_s: float = 0.05,
     ) -> bool:
-        """
-        Poll the cached StepStateAll until the given stepper reports idle,
-        or until timeout_s elapses.
+         deadline = time.monotonic() + timeout_s
+         stepper_idx = stepper - 1
 
-        Returns True if idle was reached, False if timed out.
-        """
-        from robot.hardware_map import StepperMotionState
-
-        deadline = time.monotonic() + timeout_s
-        stepper_idx = stepper - 1   # 0-based index into state array
-
-        while time.monotonic() < deadline:
+         while time.monotonic() < deadline:
             with self._lock:
-                step_state = self._step_state
+               step_state = self._step_state
 
             if step_state is not None:
-                states = getattr(step_state, 'motion_states', None)
-                if states and stepper_idx < len(states):
-                    if states[stepper_idx] == StepperMotionState.IDLE:
-                        return True
+               steppers = getattr(step_state, 'steppers', None)
+               if steppers and stepper_idx < len(steppers):
+                  if int(steppers[stepper_idx].motion_state) == 0:
+                    return True
 
             time.sleep(poll_interval_s)
 
-        try:
+         try:
             self._node.get_logger().warn(
-                f"[Gripper] Timed out waiting for stepper {stepper} to become idle."
+              f"[Gripper] Timed out waiting for stepper {stepper} to become idle."
             )
-        except Exception:
+         except Exception:
             pass
-        return False
+         return False
