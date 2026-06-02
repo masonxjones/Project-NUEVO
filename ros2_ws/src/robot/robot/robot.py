@@ -127,8 +127,9 @@ from robot.robot_impl.legacy import LegacyMixin
 # =============================================================================
 # Robot
 # =============================================================================
+from robot.robot_impl.gripper import GripperMixin
 
-class Robot(HardwareMixin, SensorsMixin, NavigationMixin, LegacyMixin):
+class Robot(HardwareMixin, SensorsMixin, NavigationMixin, LegacyMixin, GripperMixin):
     """
     Layer-1 abstraction over all bridge ROS topics and services.
 
