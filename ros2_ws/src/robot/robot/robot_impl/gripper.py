@@ -38,7 +38,7 @@ from bridge_interfaces.msg import ServoEnable, ServoSet, StepEnable, StepMove
 
 # ── Defaults (tune to your servo) ────────────────────────────────────────────
 GRIPPER_CHANNEL       = 16       # 1-based public API channel (firmware ch 15)
-GRIPPER_OPEN_US       = 900     # pulse width µs → claw open
+GRIPPER_OPEN_US       = 1000     # pulse width µs → claw open
 GRIPPER_CLOSED_US     = 1600     # pulse width µs → claw fully closed
 GRIPPER_SQUEEZE_STEP  = 20       # µs per squeeze increment
 GRIPPER_SQUEEZE_DELAY = 0.03     # seconds between increments
