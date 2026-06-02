@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from robot.robot_impl.gripper import GripperMixin
 from collections.abc import Callable
 import math
 import time
