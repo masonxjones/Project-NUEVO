@@ -17,7 +17,8 @@ services:
     build:
       context: ../..
       dockerfile: ros2_ws/docker/Dockerfile.robot
-
+    devices:
+      - /dev/ttyACM0:/dev/ttyACM0
     image: ros2-runtime:latest
 
     # Entrypoint builds/sources the workspace, then this launch file becomes

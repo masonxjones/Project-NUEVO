@@ -3,7 +3,7 @@ import time
 
 # --- CONFIGURATION ---
 # Replace with your actual port (e.g., 'COM3' for Windows, '/dev/ttyACM0' for Linux)
-SERIAL_PORT = 'COM7'
+SERIAL_PORT = '/dev/ttyUSB0'
 BAUD_RATE = 115200
 
 def send_tlv_command(ser, msg_type, payload_bytes):
@@ -45,7 +45,7 @@ def main():
             print("Monitoring Arduino logs (4 seconds)...")
             start_time = time.time()
             while time.time() - start_time < 4.0:
-                if ser.in_available() > 0:
+                if ser.in_waiting > 0:
                     line = ser.readline().decode('utf-8', errors='ignore').strip()
                     if line:
                         print(f"   [Arduino]: {line}")
