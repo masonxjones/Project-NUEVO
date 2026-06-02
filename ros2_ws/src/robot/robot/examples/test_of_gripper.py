@@ -1,60 +1,105 @@
-import serial
-import time
+"""
+ros2_ws/src/robot/robot/examples/test_of_gripper.py
+────────────────────────────────────────────────────
+Gripper test script — uses the ROS bridge (NOT raw serial).
 
-# --- CONFIGURATION ---
-# Replace with your actual port (e.g., 'COM3' for Windows, '/dev/ttyACM0' for Linux)
-SERIAL_PORT = '/dev/ttyUSB0'
-BAUD_RATE = 115200
+Run from inside the Docker container after sourcing both setup files:
 
-def send_tlv_command(ser, msg_type, payload_bytes):
-    """Packs and sends a Type-Length-Value packet over serial."""
-    length = len(payload_bytes)
-    # Construct packet: [Type] [Length] [Payload Data...] [Dummy CRC]
-    packet = bytes([msg_type, length]) + bytes(payload_bytes) + b'\x00'
-    
-    print(f"Sending packet: {packet.hex().upper()}")
-    ser.write(packet)
+    source /opt/ros/jazzy/setup.bash
+    source /ros2_ws/install/setup.bash
+    python3 src/robot/robot/examples/test_of_gripper.py
 
-def main():
-    print(f"Connecting to Arduino on {SERIAL_PORT}...")
+What it tests (press Enter to advance each step):
+    1. Open gripper
+    2. Close gripper to fixed position
+    3. Squeeze until resistance (incremental)
+    4. Full burger pick sequence at a test height
+"""
+
+import rclpy
+from rclpy.node import Node
+
+from robot.robot import Robot
+from robot.robot_impl.gripper import (
+    GRIPPER_CHANNEL,
+    GRIPPER_OPEN_US,
+    GRIPPER_CLOSED_US,
+    GRIPPER_RESISTANCE_THRESHOLD,
+)
+
+# ── Tune these for your hardware ──────────────────────────────────────────────
+TEST_STEPPER        = 1       # which stepper is the arm
+TEST_DROP_STEPS     = 500     # steps to drop for the burger pick test
+TEST_LIFT_STEPS     = 0       # steps to return to after grab
+
+
+def main() -> None:
+    rclpy.init()
+    node = Node("gripper_test")
+    robot = Robot(node)
+
+    # Spin ROS in background so subscriptions stay alive
+    import threading
+    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    spin_thread.start()
+
+    # Give the bridge a moment to deliver the first state messages
+    import time
+    time.sleep(1.0)
+
+    print("\n=== Gripper Test Script ===")
+    print(f"Channel: {GRIPPER_CHANNEL}  |  Open: {GRIPPER_OPEN_US} µs  |  Closed: {GRIPPER_CLOSED_US} µs")
+    print("Press Enter at each prompt to continue, Ctrl+C to abort.\n")
+
     try:
-        # Open serial port and wait for Arduino boot reset
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
-        time.sleep(2) 
-        
-        # --- DEFINING BURGER PIECE HEIGHTS (16-bit values split to 2 bytes) ---
-        # Format: (High Byte, Low Byte)
-        height_1_bottom_bun = [0x01, 0xF4]  # 500 steps
-        height_2_patty      = [0x03, 0xE8]  # 1000 steps
-        height_3_top_bun    = [0x05, 0xDC]  # 1500 steps
-        
-        # Array of sequences to loop through
-        burger_sequence = [
-            ("Bottom Bun", height_1_bottom_bun),
-            ("Patty",      height_2_patty),
-            ("Top Bun",    height_3_top_bun)
-        ]
-        
-        for name, height_bytes in burger_sequence:
-            input(f"\nPress Enter to execute drop and grab for: {name}...")
-            
-            # Send the MSG_BURGER_PICK (0x35) command
-            send_tlv_command(ser, 0x35, height_bytes)
-            
-            # Read back any incoming [LOOP], [CTRL], or [UART] debug logs printed from Arduino
-            print("Monitoring Arduino logs (4 seconds)...")
-            start_time = time.time()
-            while time.time() - start_time < 4.0:
-                if ser.in_waiting > 0:
-                    line = ser.readline().decode('utf-8', errors='ignore').strip()
-                    if line:
-                        print(f"   [Arduino]: {line}")
-                        
-        print("\nBurger assembly sequence test complete.")
-        ser.close()
-        
-    except Exception as e:
-        print(f"Error: {e}")
+        # ── Test 1: Open ──────────────────────────────────────────────────────
+        input("[ 1 / 4 ]  Press Enter to OPEN the gripper...")
+        print("  → Opening gripper...")
+        robot.open_gripper()
+        time.sleep(0.5)
+        print("  ✓ Done.\n")
+
+        # ── Test 2: Close ─────────────────────────────────────────────────────
+        input("[ 2 / 4 ]  Press Enter to CLOSE the gripper to fixed position...")
+        print("  → Closing gripper...")
+        robot.close_gripper()
+        time.sleep(0.5)
+        print("  ✓ Done.\n")
+
+        # ── Test 3: Squeeze until resistance ──────────────────────────────────
+        input("[ 3 / 4 ]  Press Enter to squeeze until RESISTANCE is detected...")
+        print("  → Opening first, then squeezing incrementally...")
+        robot.open_gripper()
+        time.sleep(0.3)
+        final_pulse = robot.squeeze_until_resistance(
+            resistance_threshold=GRIPPER_RESISTANCE_THRESHOLD,
+        )
+        print(f"  ✓ Resistance detected (or max reached) at {final_pulse} µs.\n")
+
+        # ── Test 4: Full burger pick ───────────────────────────────────────────
+        input(
+            f"[ 4 / 4 ]  Press Enter to run a FULL BURGER PICK "
+            f"(drop to {TEST_DROP_STEPS} steps, grab, lift back to {TEST_LIFT_STEPS})..."
+        )
+        print("  → Running burger_pick sequence...")
+        robot.burger_pick(
+            height_steps=TEST_DROP_STEPS,
+            stepper=TEST_STEPPER,
+            lift_steps=TEST_LIFT_STEPS,
+        )
+        print("  ✓ Burger pick complete.\n")
+
+    except KeyboardInterrupt:
+        print("\nAborted by user.")
+
+    finally:
+        print("Opening gripper before exit...")
+        robot.open_gripper()
+        import time as _t
+        _t.sleep(0.3)
+        node.destroy_node()
+        rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()
