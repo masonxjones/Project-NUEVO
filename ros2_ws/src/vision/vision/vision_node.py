@@ -10,6 +10,8 @@ from bridge_interfaces.msg import VisionDetection, VisionDetectionArray
 import rclpy
 from rclpy.node import Node
 
+from vision.detect_burger_pieces import classify_burger_piece # for camera check in burger_assembly_test.py
+
 from vision.camera_utils import ManagedCamera
 from vision.debug_utils import DetectionDebugWriter
 from vision.model_utils import (
@@ -31,6 +33,7 @@ CLASSES_OF_INTEREST = [
     "traffic light",
     "stop sign",
     "person",
+    "burger piece"
 ]
 
 DEFAULT_CLASS_FILTER = ",".join(CLASSES_OF_INTEREST)
@@ -309,6 +312,13 @@ class VisionNode(Node):
                         # -------------------------------------------------------------------
                         customer_id, match_score = self._face_matcher.match(person_crop)
                         detection.add_attribute("customer_id", customer_id, float(match_score))
+
+                    elif detection.class_name == "burger piece":
+                        piece_crop = object_crop
+                        result = classify_burger_piece(piece_crop)
+                        detection.add_attribute("burger_type",  result["label"],  result["score"])
+                        detection.add_attribute("patty_score",  str(result["patty_score"]),  result["patty_score"])
+                        detection.add_attribute("bun_score",    str(result["bun_score"]),    result["bun_score"])
                 
                 all_detections = yolo_detections + yellow_block_detections
 
