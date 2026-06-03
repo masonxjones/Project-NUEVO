@@ -476,19 +476,19 @@ RIGHT_WHEEL_DIR_INVERTED = True
 # Pure Pursuit + Obstacle Avoidance parameters
 # ---------------------------------------------------------------------------
 
-LOOKAHEAD_DIST  = 100.0
-MAX_LINEAR_VEL  = 140.0
-MAX_ANGULAR_VEL = 1.5
+LOOKAHEAD_DIST  = 200.0          # increased — robot looks further ahead, smoother curves
+MAX_LINEAR_VEL  = 100.0          # keep the same
+MAX_ANGULAR_VEL = 0.8            # reduced — limits how sharply it can turn
 GOAL_TOLERANCE  = 20.0
 
-OBS_RANGE_MM    = 450.0
-VIEW_ANGLE_RAD  = math.radians(70.0)
-SAFE_DIST_MM    = 250.0
-AVOIDANCE_DELAY = 150
-ALPHA_LD        = 0.7
-X_L_MM      = 205.0   # midpoint between x=0 (left lane) and x=410 (right lane)
-D_OFFSET_MM = 205.0   # shift from centerline to reach either lane
-LANE_WIDTH_MM = 450.0 # wide enough to cover both lanes
+OBS_RANGE_MM    = 400.0          # increased — detects obstacles earlier giving more time to react
+VIEW_ANGLE_RAD  = math.radians(60.0)  # narrowed — only looks forward, ignores side clutter
+SAFE_DIST_MM    = 300.0          # increased — starts avoiding earlier = gentler curve
+AVOIDANCE_DELAY = 100            # reduced — recovers back to original path faster
+ALPHA_LD        = 0.85           # increased toward 1.0 — less lookahead reduction during avoidance
+D_OFFSET_MM     = 250.0          # reduced — smaller lateral shift = gentler swerve
+X_L_MM          = 205.0
+LANE_WIDTH_MM   = 450.0
 
 
 # ---------------------------------------------------------------------------
