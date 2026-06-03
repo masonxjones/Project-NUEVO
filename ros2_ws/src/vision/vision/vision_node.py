@@ -10,22 +10,22 @@ from bridge_interfaces.msg import VisionDetection, VisionDetectionArray
 import rclpy
 from rclpy.node import Node
 
-from vision.detect_burger_pieces import classify_burger_piece # for camera check in burger_assembly_test.py
+from .detect_burger_pieces import classify_burger_piece # for camera check in burger_assembly_test.py
 
-from vision.camera_utils import ManagedCamera
-from vision.debug_utils import DetectionDebugWriter
-from vision.model_utils import (
+from .camera_utils import ManagedCamera
+from .debug_utils import DetectionDebugWriter
+from .model_utils import (
     DetectedObject,
     YoloNcnnDetector,
     default_model_path,
     resolve_model_path,
 )
-from vision.rule_based_detection import (
+from .rule_based_detection import (
     detect_yellow_block,
 )
-from vision.stop_sign import classify_stop_sign_visibility
-from vision.timing_utils import FixedRateScheduler
-from vision.traffic_light import classify_traffic_light_color
+from .stop_sign import classify_stop_sign_visibility
+from .timing_utils import FixedRateScheduler
+from .traffic_light import classify_traffic_light_color
 
 
 # User-facing COCO class filter.
