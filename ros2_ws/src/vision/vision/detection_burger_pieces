@@ -99,7 +99,7 @@ def _apply_morphology(mask: np.ndarray, kernel) -> np.ndarray:
 # PUBLIC API
 # ════════════════════════════════════════════════════════════════════════════
 
-def classify_burger_piece(crop: np.ndarray) -> dict:
+def classify_burger_pieces(crop: np.ndarray) -> dict:
     """
     Classify a cropped image as patty, bun, or none.
 
