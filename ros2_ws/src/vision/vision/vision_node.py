@@ -10,22 +10,22 @@ from bridge_interfaces.msg import VisionDetection, VisionDetectionArray
 import rclpy
 from rclpy.node import Node
 
-from .detect_burger_pieces import classify_burger_piece # for camera check in burger_assembly_test.py
+# from vision.detect_burger_pieces import classify_burger_piece # for camera check in burger_assembly_test.py
 
-from .camera_utils import ManagedCamera
-from .debug_utils import DetectionDebugWriter
-from .model_utils import (
+from vision.camera_utils import ManagedCamera
+from vision.debug_utils import DetectionDebugWriter
+from vision.model_utils import (
     DetectedObject,
     YoloNcnnDetector,
     default_model_path,
     resolve_model_path,
 )
-from .rule_based_detection import (
+from vision.rule_based_detection import (
     detect_yellow_block,
 )
-from .stop_sign import classify_stop_sign_visibility
-from .timing_utils import FixedRateScheduler
-from .traffic_light import classify_traffic_light_color
+from vision.stop_sign import classify_stop_sign_visibility
+from vision.timing_utils import FixedRateScheduler
+from vision.traffic_light import classify_traffic_light_color
 
 
 # User-facing COCO class filter.
@@ -33,7 +33,7 @@ CLASSES_OF_INTEREST = [
     "traffic light",
     "stop sign",
     "person",
-    "burger piece"
+    # "burger piece"
 ]
 
 DEFAULT_CLASS_FILTER = ",".join(CLASSES_OF_INTEREST)
@@ -313,12 +313,12 @@ class VisionNode(Node):
                         customer_id, match_score = self._face_matcher.match(person_crop)
                         detection.add_attribute("customer_id", customer_id, float(match_score))
 
-                    elif detection.class_name == "burger piece":
-                        piece_crop = object_crop
-                        result = classify_burger_piece(piece_crop)
-                        detection.add_attribute("burger_type",  result["label"],  result["score"])
-                        detection.add_attribute("patty_score",  str(result["patty_score"]),  result["patty_score"])
-                        detection.add_attribute("bun_score",    str(result["bun_score"]),    result["bun_score"])
+                    ## elif detection.class_name == "burger piece":
+                       ##  piece_crop = object_crop
+                        # result = classify_burger_piece(piece_crop)
+                       #  detection.add_attribute("burger_type",  result["label"],  result["score"])
+                        # detection.add_attribute("patty_score",  str(result["patty_score"]),  result["patty_score"])
+                        # detection.add_attribute("bun_score",    str(result["bun_score"]),    result["bun_score"])
                 
                 all_detections = yolo_detections + yellow_block_detections
 
