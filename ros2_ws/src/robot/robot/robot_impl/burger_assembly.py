@@ -232,23 +232,42 @@ class BurgerAssemblyMixin:
 
     # ── Camera detection helpers ──────────────────────────────────────────────
 
-    def _get_detection(self, class_name: str) -> Optional[dict]:
-        """
-        Return the highest-confidence detection matching class_name,
-        or None if not found.
-        Reads from self._vision_detections (populated by Robot's vision sub).
-        """
+    def _get_detection(self, class_name: str):
+        # Return highest-confidence detection matching class_name OR
+        # matching burger_type attribute (for burger pieces detected by
+        # classify_burger_piece rather than YOLO directly).
+        
         with self._lock:
             detections = list(self._vision_detections)
-
-        best = None
+ 
+        target_burger_type = None
+        if class_name == "red_block":
+            target_burger_type = "patty"
+        elif class_name == "yellow_block":
+            target_burger_type = "bun"
+ 
+        best      = None
         best_conf = 0.0
+ 
         for d in detections:
+            matched = False
+ 
+            # Direct class_name match (e.g. YOLO detects "red_block" natively)
             if d.get("class_name") == class_name:
+                matched = True
+ 
+            # Attribute match (classify_burger_piece tagged this detection)
+            if target_burger_type is not None:
+                attrs = d.get("attributes", {})
+                if attrs.get("burger_type") == target_burger_type:
+                    matched = True
+ 
+            if matched:
                 conf = float(d.get("confidence", 0.0))
                 if conf > best_conf:
                     best_conf = conf
                     best = d
+ 
         return best
 
     def _detection_x_offset(self, detection: dict) -> float:
