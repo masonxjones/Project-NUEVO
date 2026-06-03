@@ -1,7 +1,9 @@
 import cv2
 import numpy as np
-# Assuming your file is located at vision/detect_burger_pieces.py
-from detect_burger_pieces import classify_burger_piece, BUN_YELLOW_LOW, BUN_YELLOW_HIGH
+
+
+# Change this line to import directly from the neighboring file
+from vision.detection_burger_pieces import classify_burger_piece, BUN_YELLOW_LOW, BUN_YELLOW_HIGH
 
 def mouse_callback(event, x, y, flags, param):
     """Prints HSV values when you click on the image."""
