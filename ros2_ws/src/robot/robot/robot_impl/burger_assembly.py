@@ -1,153 +1,128 @@
 """
 robot/robot_impl/burger_assembly.py
 ════════════════════════════════════
-BurgerAssemblyMixin — add to Robot's MRO alongside the other mixins.
+BurgerAssemblyMixin — camera-guided burger assembly with stepper swing alignment.
 
 Physical setup
 ──────────────
-  STEPPER_ELEVATOR  (default 1) — two ganged motors driving the z-axis arm lift.
-                                   Steps increase going DOWN toward the table.
-  STEPPER_SWING     (default 2) — single motor rotating the arm 0–180° over the
-                                   robot's top half.
-                                   Step 0   = one limit switch (e.g. left side)
-                                   Step MAX = other limit switch (right side)
-                                   Step MID ≈ facing forward (over lidar)
+  STEPPER_ELEVATOR (1) — two ganged motors, z-axis lift.
+                         Steps INCREASE going DOWN toward the table.
+  STEPPER_SWING    (2) — single motor, 0–180° arm rotation over robot top half.
+                         Step 0   = left limit switch
+                         Step MAX = right limit switch
+                         Lidar sits at the midpoint of the arc (~90°)
 
-  Servo channel 1 (firmware ch 0) = gripper claw on the arm tip.
+  Servo channel 16 (firmware ch 15) = gripper claw.
 
-  Limit switches are wired to the firmware's IO input system and readable via
-  robot.get_limit(n).  The exact limit numbers must be configured in
-  ARM_SWING_LIMIT_LEFT and ARM_SWING_LIMIT_RIGHT below.
+  Camera is mounted ON the arm — it points at whatever the arm faces.
+  Bounding-box X offset from frame centre drives swing correction.
 
-Public API
-──────────
-All positions are in raw stepper steps (absolute).
+Piece detection
+───────────────
+  Yellow colour → bun   (uses detect_yellow_block from vision node)
+  Red colour    → patty (uses detect_red_block, defined below)
 
-  robot.arm_home()
-      Drive swing to left limit switch, zero that axis.
-      Drive elevator to top limit switch, zero that axis.
-      Optional — call at startup if homing is needed.
+  The vision node publishes to /vision/detections.  We subscribe and look for
+  detections with class_name == "yellow_block" or "red_block".
 
-  robot.arm_swing_to(steps)
-      Move swing stepper to absolute position.
+Grip pulses (empirically tuned)
+────────────────────────────────
+  BUN_GRIP_US   = 1430   (softer — buns are squishier)
+  PATTY_GRIP_US = 1500   (firmer — patty is denser)
 
-  robot.arm_elevator_to(steps)
-      Move elevator stepper to absolute position.
-
-  robot.arm_open_gripper()  /  robot.arm_close_gripper()
-      Convenience wrappers around GripperMixin.
-
-  robot.arm_pick(elevator_steps, swing_steps)
-      Swing → drop → squeeze → lift full pick sequence.
-
-  robot.arm_place(elevator_steps, swing_steps, open_pulse_us)
-      Swing → drop → open gripper → lift full place sequence.
-
-  robot.assemble_burger(pieces)
-      Full burger stacking sequence.  pieces is a list of BurgerPiece
-      namedtuples describing each piece's pick and place positions.
-
-Usage example
-─────────────
-  from robot.robot_impl.burger_assembly import BurgerAssemblyMixin, BurgerPiece
-
-  pieces = [
-      BurgerPiece("bottom_bun", pick_swing=200,  pick_elevator=800,
-                               place_swing=900,  place_elevator=600),
-      BurgerPiece("patty",      pick_swing=1200, pick_elevator=850,
-                               place_swing=900,  place_elevator=500),
-      BurgerPiece("top_bun",   pick_swing=2200, pick_elevator=800,
-                               place_swing=900,  place_elevator=400),
-  ]
-  robot.assemble_burger(pieces)
+Assembly order
+──────────────
+  Step 1 — Pick PATTY,      place on BOTTOM BUN position (stack starts)
+  Step 2 — Pick TOP BUN,    place on top of patty
+  Step 3 — Pick full STACK  (gripper open, lower onto stack, close, lift away)
 
 Navigation hook
 ───────────────
-  assemble_burger() accepts an optional `navigate_to_piece` callback:
-
-      def go_to_piece(piece: BurgerPiece) -> None:
-          # Your team's navigation code here
-          robot.drive_to(piece.pick_x_mm, piece.pick_y_mm)
-
-      robot.assemble_burger(pieces, navigate_to_piece=go_to_piece)
-
-  If not provided, the robot stays in place and just moves the arm.
+  assemble_burger() accepts an optional navigate_to_piece(piece_type: str) 
+  callback your team fills in. piece_type will be "patty", "top_bun", or "stack".
 """
 
 from __future__ import annotations
 
 import time
-from typing import Callable, NamedTuple, Optional
+from typing import Callable, Optional
 
 from bridge_interfaces.msg import StepEnable, StepHome, StepMove
 
 
-# ── Physical constants — tune to your robot ──────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# TUNABLE CONSTANTS — adjust these to match your robot
+# ════════════════════════════════════════════════════════════════════════════
 
-STEPPER_ELEVATOR        = 1      # stepper number (1-based) for z-axis lift
-STEPPER_SWING           = 2      # stepper number (1-based) for arm rotation
+# ── Stepper numbers (1-based) ─────────────────────────────────────────────
+STEPPER_ELEVATOR        = 1
+STEPPER_SWING           = 2
 
-ELEVATOR_HOME_STEPS     = 0      # step count when arm is fully raised (safe travel position)
-ELEVATOR_SAFE_STEPS     = 0      # safe height to travel at (same as home unless tower has offset)
-SWING_HOME_STEPS        = 0      # step count at left limit switch (home)
-SWING_SAFE_STEPS        = 0      # step count for arm parked safely out of drive path
+# ── Elevator positions (steps, increase = lower) ──────────────────────────
+ELEVATOR_SAFE_STEPS     = 0      # fully raised — safe to swing
+ELEVATOR_PATTY_PICK     = 850    # depth to reach the patty
+ELEVATOR_BUN_PICK       = 800    # depth to reach a bun
+ELEVATOR_PLACE_STEP1    = 600    # height of empty table (bottom bun resting here)
+ELEVATOR_PLACE_STEP2    = 500    # height after patty is on bottom bun
+ELEVATOR_PLACE_STEP3    = 400    # height after top bun is on patty
+ELEVATOR_STACK_GRAB     = 580    # depth to lower gripper around full stack
 
-ELEVATOR_HOME_VELOCITY  = 200    # steps/s for homing move (slow)
-ELEVATOR_HOME_DIRECTION = 0      # 0 = negative direction (upward)
-ELEVATOR_HOME_BACKOFF   = 50     # steps to back off after hitting limit
+# ── Swing positions (steps) ───────────────────────────────────────────────
+SWING_HOME_STEPS        = 0      # left limit switch
+SWING_SAFE_STEPS        = 0      # parked position (out of lidar FOV)
+SWING_SCAN_START        = 100    # where to begin the detection sweep
+SWING_SCAN_END          = 900    # where to end the detection sweep
+SWING_SCAN_STEP         = 30     # steps per sweep increment
+SWING_SCAN_PAUSE        = 0.15   # seconds to pause at each sweep position
 
-SWING_HOME_VELOCITY     = 200
-SWING_HOME_DIRECTION    = 0      # 0 = toward left limit switch
-SWING_HOME_BACKOFF      = 30
+# ── Camera / alignment ────────────────────────────────────────────────────
+CAMERA_FRAME_WIDTH      = 640    # pixels — must match vision node camera_width
+PIXELS_TO_STEPS_GAIN    = 0.5    # tune: steps per pixel of X offset
+ALIGNMENT_TOLERANCE_PX  = 20     # pixels — centred enough to pick
+ALIGNMENT_MAX_ITERS     = 10     # max correction iterations before giving up
 
-ARM_SWING_LIMIT_LEFT    = 1      # robot.get_limit() index for left swing limit switch
-ARM_SWING_LIMIT_RIGHT   = 2      # robot.get_limit() index for right swing limit switch
-
-GRIPPER_OPEN_US         = 1000   # pulse µs — claw open
-GRIPPER_CLOSED_US       = 2000   # pulse µs — claw closed
+# ── Grip pulses (µs) ─────────────────────────────────────────────────────
+GRIPPER_OPEN_US         = 900    # claw fully open
+BUN_GRIP_US             = 1430   # grip for buns (softer)
+PATTY_GRIP_US           = 1500   # grip for patty (firmer)
+STACK_GRIP_US           = 1430   # grip for full stack (treat like bun)
 GRIPPER_CHANNEL         = 16     # servo channel (1-based, firmware ch 15)
 
-STEPPER_MOVE_TIMEOUT_S  = 15.0   # max seconds to wait for any single stepper move
-STEPPER_SETTLE_S        = 0.15   # short settle pause after each move
+# ── Piece radii (mm, hard-coded geometry) ────────────────────────────────
+PATTY_RADIUS_MM         = 50.0   # radius of patty
+BUN_RADIUS_MM           = 55.0   # radius of bun (slightly larger than patty)
+STACK_RADIUS_MM         = 55.0   # treat assembled stack as bun-sized
+
+# ── Timing ────────────────────────────────────────────────────────────────
+STEPPER_MOVE_TIMEOUT_S  = 15.0
+STEPPER_SETTLE_S        = 0.15
+
+# ── Homing ────────────────────────────────────────────────────────────────
+ELEVATOR_HOME_VELOCITY  = 200
+ELEVATOR_HOME_DIRECTION = 0
+ELEVATOR_HOME_BACKOFF   = 50
+SWING_HOME_VELOCITY     = 200
+SWING_HOME_DIRECTION    = 0
+SWING_HOME_BACKOFF      = 30
 
 
-# ── BurgerPiece descriptor ────────────────────────────────────────────────────
-
-class BurgerPiece(NamedTuple):
-    """
-    Describes one burger piece's pick and place positions.
-
-    All step values are absolute stepper positions.
-    pick_x_mm / pick_y_mm are optional — used only when a navigate_to_piece
-    callback is provided to assemble_burger().
-    """
-    name:           str
-    pick_swing:     int    # swing stepper position to reach above the piece
-    pick_elevator:  int    # elevator stepper position to descend to the piece
-    place_swing:    int    # swing stepper position above the stack
-    place_elevator: int    # elevator stepper position to set piece on stack
-    pick_x_mm:      float = 0.0   # robot XY to drive to before picking (optional)
-    pick_y_mm:      float = 0.0
-
-
-# ── Mixin ─────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# MIXIN
+# ════════════════════════════════════════════════════════════════════════════
 
 class BurgerAssemblyMixin:
     """
-    High-level burger assembly methods for the Robot class.
+    Camera-guided burger assembly mixin for the Robot class.
 
-    Requires (already present in Robot.__init__):
-        self._step_en_pub   — StepEnable publisher
-        self._step_mv_pub   — StepMove publisher
-        self._step_hm_pub   — StepHome publisher
-        self._step_state    — cached StepStateAll (updated by subscription)
-        self._lock          — threading.Lock
-        self._node          — rclpy Node (for logging)
-
-    Also requires GripperMixin to be in the MRO (for open/close gripper calls).
+    Requires in Robot.__init__ (all already present):
+        self._step_en_pub, self._step_mv_pub, self._step_hm_pub
+        self._step_state   (cached StepStateAll)
+        self._vision_detections  (cached list[dict] from /vision/detections)
+        self._lock, self._node
+    Also requires GripperMixin in the MRO.
     """
 
-    # ── Logging helper ────────────────────────────────────────────────────────
+    # ── Logging ──────────────────────────────────────────────────────────────
 
     def _arm_log(self, msg: str) -> None:
         try:
@@ -161,7 +136,7 @@ class BurgerAssemblyMixin:
         except Exception:
             print(f"[BurgerArm] WARN: {msg}")
 
-    # ── Low-level stepper wrappers ────────────────────────────────────────────
+    # ── Low-level stepper helpers ─────────────────────────────────────────────
 
     def _step_enable(self, stepper: int, enable: bool) -> None:
         msg = StepEnable()
@@ -170,20 +145,13 @@ class BurgerAssemblyMixin:
         self._step_en_pub.publish(msg)
 
     def _step_move_abs(self, stepper: int, target_steps: int) -> None:
-        """Publish an absolute-position stepper move (move_type=0 = ABSOLUTE)."""
         msg = StepMove()
         msg.stepper_number = stepper
-        msg.move_type = 0   # StepMoveType.ABSOLUTE
+        msg.move_type = 0   # ABSOLUTE
         msg.target = int(target_steps)
         self._step_mv_pub.publish(msg)
 
-    def _step_home_cmd(
-        self,
-        stepper: int,
-        direction: int,
-        velocity: int,
-        backoff: int,
-    ) -> None:
+    def _step_home_cmd(self, stepper, direction, velocity, backoff) -> None:
         msg = StepHome()
         msg.stepper_number = stepper
         msg.direction = direction
@@ -197,49 +165,38 @@ class BurgerAssemblyMixin:
         timeout_s: float = STEPPER_MOVE_TIMEOUT_S,
         poll_s: float = 0.05,
     ) -> bool:
-        """
-        Block until the given stepper reports IDLE in StepStateAll,
-        or until timeout_s elapses.  Returns True if idle reached.
-        """
-        from robot.hardware_map import StepperMotionState
+        """Block until stepper reports idle (motion_state == 0) or timeout."""
         deadline = time.monotonic() + timeout_s
-        idx = stepper - 1   # 0-based index
+        idx = stepper - 1   # 0-based
 
         while time.monotonic() < deadline:
             with self._lock:
-                state = self._step_state
-            if state is not None:
-                motion_states = getattr(state, 'motion_states', None)
-                if motion_states and idx < len(motion_states):
-                    if int(motion_states[idx]) == int(StepperMotionState.IDLE):
+                step_state = self._step_state
+            if step_state is not None:
+                steppers = getattr(step_state, 'steppers', None)
+                if steppers and idx < len(steppers):
+                    if int(steppers[idx].motion_state) == 0:
                         return True
             time.sleep(poll_s)
 
-        self._arm_warn(f"Timeout waiting for stepper {stepper} to idle.")
+        self._arm_warn(f"Timeout waiting for stepper {stepper}.")
         return False
 
-    def _move_and_wait(
-        self,
-        stepper: int,
-        target_steps: int,
-        settle_s: float = STEPPER_SETTLE_S,
-    ) -> bool:
-        """Move stepper to target_steps and block until idle."""
-        self._step_move_abs(stepper, target_steps)
+    def _move_and_wait(self, stepper: int, steps: int,
+                       settle_s: float = STEPPER_SETTLE_S) -> bool:
+        self._step_move_abs(stepper, steps)
         ok = self._wait_stepper(stepper)
         if settle_s > 0:
             time.sleep(settle_s)
         return ok
 
-    # ── Arm-level moves ───────────────────────────────────────────────────────
+    # ── Arm primitives ────────────────────────────────────────────────────────
 
     def arm_elevator_to(self, steps: int) -> bool:
-        """Move the elevator to an absolute step position. Blocks until idle."""
         self._arm_log(f"Elevator → {steps} steps")
         return self._move_and_wait(STEPPER_ELEVATOR, steps)
 
     def arm_swing_to(self, steps: int) -> bool:
-        """Swing the arm to an absolute step position. Blocks until idle."""
         self._arm_log(f"Swing → {steps} steps")
         return self._move_and_wait(STEPPER_SWING, steps)
 
@@ -248,212 +205,341 @@ class BurgerAssemblyMixin:
         return self.arm_elevator_to(ELEVATOR_SAFE_STEPS)
 
     def arm_open_gripper(self) -> None:
-        """Open the gripper claw."""
         self.open_gripper(channel=GRIPPER_CHANNEL, pulse_us=GRIPPER_OPEN_US)
         time.sleep(0.15)
 
-    def arm_close_gripper(self) -> None:
-        """Close the gripper claw to fixed closed position."""
-        self.close_gripper(channel=GRIPPER_CHANNEL, pulse_us=GRIPPER_CLOSED_US)
+    def arm_grip(self, pulse_us: int) -> None:
+        """Close gripper to a specific pulse width."""
+        self.close_gripper(channel=GRIPPER_CHANNEL, pulse_us=pulse_us)
         time.sleep(0.15)
 
     # ── Homing ────────────────────────────────────────────────────────────────
 
     def arm_home(self) -> None:
-        """
-        Home both axes by driving to their limit switches.
-
-        Call at startup if the arm position is unknown.
-        Safe to skip if the arm is already at a known position.
-        """
+        """Home both axes to their limit switches. Optional at startup."""
         self._arm_log("Homing elevator...")
         self._step_enable(STEPPER_ELEVATOR, True)
-        self._step_home_cmd(
-            STEPPER_ELEVATOR,
-            direction=ELEVATOR_HOME_DIRECTION,
-            velocity=ELEVATOR_HOME_VELOCITY,
-            backoff=ELEVATOR_HOME_BACKOFF,
-        )
+        self._step_home_cmd(STEPPER_ELEVATOR, ELEVATOR_HOME_DIRECTION,
+                            ELEVATOR_HOME_VELOCITY, ELEVATOR_HOME_BACKOFF)
         self._wait_stepper(STEPPER_ELEVATOR, timeout_s=30.0)
-        self._arm_log("Elevator homed.")
 
         self._arm_log("Homing swing...")
         self._step_enable(STEPPER_SWING, True)
-        self._step_home_cmd(
-            STEPPER_SWING,
-            direction=SWING_HOME_DIRECTION,
-            velocity=SWING_HOME_VELOCITY,
-            backoff=SWING_HOME_BACKOFF,
-        )
+        self._step_home_cmd(STEPPER_SWING, SWING_HOME_DIRECTION,
+                            SWING_HOME_VELOCITY, SWING_HOME_BACKOFF)
         self._wait_stepper(STEPPER_SWING, timeout_s=30.0)
-        self._arm_log("Swing homed. Arm at home position.")
+        self._arm_log("Homing complete.")
 
-    # ── Pick and place primitives ─────────────────────────────────────────────
+    # ── Camera detection helpers ──────────────────────────────────────────────
 
-    def arm_pick(
-        self,
-        elevator_steps: int,
-        swing_steps: int,
-        resistance_threshold: int = 500,
-    ) -> int:
+    def _get_detection(self, class_name: str) -> Optional[dict]:
         """
-        Full pick sequence for one piece:
-            1. Raise elevator to safe height
-            2. Swing to pick position
+        Return the highest-confidence detection matching class_name,
+        or None if not found.
+        Reads from self._vision_detections (populated by Robot's vision sub).
+        """
+        with self._lock:
+            detections = list(self._vision_detections)
+
+        best = None
+        best_conf = 0.0
+        for d in detections:
+            if d.get("class_name") == class_name:
+                conf = float(d.get("confidence", 0.0))
+                if conf > best_conf:
+                    best_conf = conf
+                    best = d
+        return best
+
+    def _detection_x_offset(self, detection: dict) -> float:
+        """
+        Return the bounding-box centre X offset from the frame centre (pixels).
+        Positive = piece is to the right, negative = to the left.
+        """
+        bbox_centre_x = detection["x"] + detection["width"] / 2.0
+        return bbox_centre_x - (CAMERA_FRAME_WIDTH / 2.0)
+
+    # ── Sweep and align ───────────────────────────────────────────────────────
+
+    def arm_sweep_and_align(self, class_name: str) -> Optional[int]:
+        """
+        Sweep the arm from SWING_SCAN_START to SWING_SCAN_END until a
+        detection of class_name appears, then centre the piece in frame
+        using proportional swing corrections.
+
+        Returns the final swing step position when aligned, or None if the
+        piece was never found.
+
+        Args:
+            class_name: "yellow_block" for buns, "red_block" for patty.
+        """
+        self._arm_log(f"Sweeping for '{class_name}'...")
+
+        # ── Phase 1: sweep until piece appears ───────────────────────────────
+        current_swing = SWING_SCAN_START
+        found = False
+
+        while current_swing <= SWING_SCAN_END:
+            self.arm_swing_to(current_swing)
+            time.sleep(SWING_SCAN_PAUSE)   # let camera settle
+
+            if self._get_detection(class_name) is not None:
+                self._arm_log(
+                    f"'{class_name}' detected at swing={current_swing} steps."
+                )
+                found = True
+                break
+
+            current_swing += SWING_SCAN_STEP
+
+        if not found:
+            self._arm_warn(
+                f"'{class_name}' not found during sweep "
+                f"({SWING_SCAN_START}→{SWING_SCAN_END} steps)."
+            )
+            return None
+
+        # ── Phase 2: centre the piece in frame ───────────────────────────────
+        self._arm_log("Centering piece in frame...")
+
+        for iteration in range(ALIGNMENT_MAX_ITERS):
+            time.sleep(SWING_SCAN_PAUSE)
+            detection = self._get_detection(class_name)
+
+            if detection is None:
+                self._arm_warn("Lost detection during alignment — stopping.")
+                break
+
+            x_offset = self._detection_x_offset(detection)
+            self._arm_log(
+                f"  Alignment iter {iteration + 1}: "
+                f"x_offset={x_offset:.1f} px"
+            )
+
+            if abs(x_offset) <= ALIGNMENT_TOLERANCE_PX:
+                self._arm_log(
+                    f"Aligned! x_offset={x_offset:.1f} px ≤ "
+                    f"{ALIGNMENT_TOLERANCE_PX} px tolerance."
+                )
+                break
+
+            # Proportional correction: positive offset → swing more steps
+            correction = int(x_offset * PIXELS_TO_STEPS_GAIN)
+            current_swing = current_swing + correction
+            current_swing = max(SWING_SCAN_START,
+                                min(SWING_SCAN_END, current_swing))
+            self.arm_swing_to(current_swing)
+
+        return current_swing
+
+    # ── Pick with camera alignment ────────────────────────────────────────────
+
+    def arm_pick_piece(
+        self,
+        class_name: str,
+        elevator_steps: int,
+        grip_pulse_us: int,
+        piece_radius_mm: float,
+    ) -> bool:
+        """
+        Camera-guided pick sequence:
+            1. Raise to safe height
+            2. Sweep arm until piece detected, then centre it
             3. Open gripper
             4. Lower elevator to piece
-            5. Squeeze until resistance (or max)
-            6. Raise elevator back to safe height
+            5. Close gripper at the tuned grip pulse
+            6. Raise to safe height
 
-        Returns the final gripper pulse_us when grip was detected.
+        Args:
+            class_name:      "yellow_block" or "red_block"
+            elevator_steps:  How far to lower the elevator to reach the piece
+            grip_pulse_us:   Servo pulse width µs for this piece type
+            piece_radius_mm: Physical radius of the piece (for logging/debug)
+
+        Returns True if pick succeeded, False if piece was not found.
         """
-        self._arm_log(f"Pick: swing={swing_steps} elevator={elevator_steps}")
+        self._arm_log(
+            f"Picking '{class_name}' "
+            f"(radius={piece_radius_mm:.0f}mm, grip={grip_pulse_us}µs)"
+        )
 
-        # 1. Safe height before swinging
+        # 1. Safe height
         self.arm_safe_height()
 
-        # 2. Swing to pick position
-        self.arm_swing_to(swing_steps)
+        # 2. Sweep and align
+        aligned_swing = self.arm_sweep_and_align(class_name)
+        if aligned_swing is None:
+            self._arm_warn(f"Could not find '{class_name}' — aborting pick.")
+            return False
 
-        # 3. Open gripper
+        # 3. Open gripper before descending
         self.arm_open_gripper()
 
         # 4. Lower to piece
+        self._arm_log(f"Lowering to {elevator_steps} steps...")
         self.arm_elevator_to(elevator_steps)
 
-        # 5. Squeeze until resistance
-        self._arm_log("Squeezing...")
-        final_pulse = self.squeeze_until_resistance(
-            channel=GRIPPER_CHANNEL,
-            start_pulse_us=GRIPPER_OPEN_US,
-            max_pulse_us=GRIPPER_CLOSED_US,
-            resistance_threshold=resistance_threshold,
-        )
-        self._arm_log(f"Grip at {final_pulse} µs.")
+        # 5. Close gripper at piece-specific pulse
+        self._arm_log(f"Gripping at {grip_pulse_us} µs...")
+        self.arm_grip(grip_pulse_us)
+        time.sleep(0.2)
 
-        # 6. Raise back to safe height (piece in gripper)
+        # 6. Lift piece
         self.arm_safe_height()
 
-        return final_pulse
+        self._arm_log(f"'{class_name}' picked ✓")
+        return True
 
-    def arm_place(
+    # ── Place ─────────────────────────────────────────────────────────────────
+
+    def arm_place_piece(
         self,
-        elevator_steps: int,
         swing_steps: int,
+        elevator_steps: int,
+        label: str = "",
     ) -> None:
         """
-        Full place sequence for one piece:
-            1. Raise elevator to safe height (should already be there after pick)
+        Place the currently held piece:
+            1. Safe height (already there after pick)
             2. Swing to place position
-            3. Lower elevator to stack height
-            4. Open gripper to release piece
-            5. Raise elevator back to safe height
+            3. Lower to stack height
+            4. Open gripper
+            5. Raise to safe height
         """
-        self._arm_log(f"Place: swing={swing_steps} elevator={elevator_steps}")
-
-        # 1. Confirm safe height
+        self._arm_log(
+            f"Placing{' ' + label if label else ''} at "
+            f"swing={swing_steps}, elevator={elevator_steps}"
+        )
         self.arm_safe_height()
-
-        # 2. Swing to stack position
         self.arm_swing_to(swing_steps)
-
-        # 3. Lower to stack
         self.arm_elevator_to(elevator_steps)
-
-        # 4. Release piece
         self.arm_open_gripper()
-        time.sleep(0.2)   # brief pause so piece settles before lifting
-
-        # 5. Raise clear of stack
+        time.sleep(0.25)   # let piece settle before lifting
         self.arm_safe_height()
+        self._arm_log("Place complete ✓")
 
-        self._arm_log("Place complete.")
-
-    # ── Full burger assembly sequence ─────────────────────────────────────────
+    # ── Full burger assembly ──────────────────────────────────────────────────
 
     def assemble_burger(
         self,
-        pieces: list[BurgerPiece],
-        navigate_to_piece: Optional[Callable[[BurgerPiece], None]] = None,
-        resistance_threshold: int = 500,
+        stack_swing_steps: int,
+        navigate_to_piece: Optional[Callable[[str], None]] = None,
         home_on_start: bool = False,
         park_on_finish: bool = True,
     ) -> None:
         """
-        Assemble a full burger by picking and stacking each piece in order.
+        Full burger assembly sequence.
+
+        Assembly order
+        ──────────────
+          Step 1 — Locate PATTY with camera → pick → place on stack position
+          Step 2 — Locate TOP BUN with camera → pick → place on top of patty
+          Step 3 — Lower open gripper onto full STACK → grip → lift and carry
 
         Args:
-            pieces:
-                Ordered list of BurgerPiece descriptors.  First piece = bottom
-                bun, last piece = top bun.
+            stack_swing_steps:
+                Swing stepper position directly above the assembly stack.
+                The bottom bun is assumed to already be at this position on
+                the table before assembly begins.
 
             navigate_to_piece:
-                Optional callback called before each pick.  Receives the
-                BurgerPiece about to be picked.  Use this to hook in your
-                team's navigation code:
+                Optional callback called before each pick so your team's
+                navigation code can drive the robot to the right area.
+                Receives a string: "patty", "top_bun", or "stack".
 
-                    def go_to(piece):
-                        robot.navigate_to(piece.pick_x_mm, piece.pick_y_mm)
-
-                If None, the robot stays in place (arm-only operation).
-
-            resistance_threshold:
-                ADC threshold for grip detection (0–1023).
+                Example:
+                    def go_to(piece_type):
+                        if piece_type == "patty":
+                            robot.navigate_to(patty_x, patty_y)
 
             home_on_start:
-                If True, home both axes before starting.  Set True if arm
-                position is unknown at script start.
+                Home both axes before starting (set True if position unknown).
 
             park_on_finish:
-                If True, swing arm to SWING_SAFE_STEPS after all pieces are
-                stacked so it doesn't block the lidar during navigation.
+                Swing arm to SWING_SAFE_STEPS after carrying the stack,
+                so it doesn't block the lidar during onward navigation.
         """
-        self._arm_log(f"Starting burger assembly: {len(pieces)} pieces.")
+        self._arm_log("═══ Burger assembly START ═══")
 
         # Enable both steppers
         self._step_enable(STEPPER_ELEVATOR, True)
         self._step_enable(STEPPER_SWING, True)
 
-        # Optional homing
         if home_on_start:
             self.arm_home()
 
-        for i, piece in enumerate(pieces):
-            self._arm_log(
-                f"── Piece {i + 1}/{len(pieces)}: {piece.name} ──"
-            )
-
-            # Navigate to pick position if a callback was provided
+        def navigate(piece_type: str) -> None:
             if navigate_to_piece is not None:
-                self._arm_log(
-                    f"Navigating to pick position "
-                    f"({piece.pick_x_mm:.0f}, {piece.pick_y_mm:.0f}) mm..."
-                )
+                self._arm_log(f"Navigating to {piece_type}...")
                 try:
-                    navigate_to_piece(piece)
+                    navigate_to_piece(piece_type)
                 except Exception as e:
-                    self._arm_warn(f"Navigation callback raised: {e} — continuing anyway.")
+                    self._arm_warn(f"Navigation raised: {e} — continuing.")
 
-            # Pick
-            self.arm_pick(
-                elevator_steps=piece.pick_elevator,
-                swing_steps=piece.pick_swing,
-                resistance_threshold=resistance_threshold,
-            )
+        # ── STEP 1: Pick patty, place on bottom bun ───────────────────────────
+        self._arm_log("── Step 1/3: Pick PATTY ──")
+        navigate("patty")
+        ok = self.arm_pick_piece(
+            class_name      = "red_block",
+            elevator_steps  = ELEVATOR_PATTY_PICK,
+            grip_pulse_us   = PATTY_GRIP_US,
+            piece_radius_mm = PATTY_RADIUS_MM,
+        )
+        if not ok:
+            self._arm_warn("PATTY pick failed — assembly aborted.")
+            return
 
-            # Place
-            self.arm_place(
-                elevator_steps=piece.place_elevator,
-                swing_steps=piece.place_swing,
-            )
+        self._arm_log("── Step 1/3: Place PATTY on bottom bun ──")
+        # Bottom bun is already on the table at stack_swing_steps
+        self.arm_place_piece(
+            swing_steps    = stack_swing_steps,
+            elevator_steps = ELEVATOR_PLACE_STEP1,
+            label          = "patty on bottom bun",
+        )
 
-            self._arm_log(f"{piece.name} stacked ✓")
+        # ── STEP 2: Pick top bun, place on patty ──────────────────────────────
+        self._arm_log("── Step 2/3: Pick TOP BUN ──")
+        navigate("top_bun")
+        ok = self.arm_pick_piece(
+            class_name      = "yellow_block",
+            elevator_steps  = ELEVATOR_BUN_PICK,
+            grip_pulse_us   = BUN_GRIP_US,
+            piece_radius_mm = BUN_RADIUS_MM,
+        )
+        if not ok:
+            self._arm_warn("TOP BUN pick failed — assembly aborted.")
+            return
 
-        self._arm_log("All pieces stacked — burger assembly complete!")
+        self._arm_log("── Step 2/3: Place TOP BUN on patty ──")
+        self.arm_place_piece(
+            swing_steps    = stack_swing_steps,
+            elevator_steps = ELEVATOR_PLACE_STEP2,
+            label          = "top bun on patty",
+        )
 
-        # Park arm out of lidar FOV for post-assembly navigation
+        # ── STEP 3: Grab full stack and carry it ──────────────────────────────
+        self._arm_log("── Step 3/3: Grab FULL STACK ──")
+        navigate("stack")
+
+        # Swing over stack, open gripper, lower around stack, grip, lift
+        self.arm_safe_height()
+        self.arm_swing_to(stack_swing_steps)
+        self.arm_open_gripper()
+
+        self._arm_log(f"Lowering onto stack at {ELEVATOR_STACK_GRAB} steps...")
+        self.arm_elevator_to(ELEVATOR_STACK_GRAB)
+
+        self._arm_log(f"Gripping stack at {STACK_GRIP_US} µs...")
+        self.arm_grip(STACK_GRIP_US)
+        time.sleep(0.3)
+
+        self._arm_log("Lifting full stack...")
+        self.arm_safe_height()
+
+        self._arm_log("═══ Stack in hand — burger assembly COMPLETE ═══")
+
+        # Park arm after carrying stack
         if park_on_finish:
             self._arm_log(f"Parking arm at swing={SWING_SAFE_STEPS}...")
-            self.arm_safe_height()
             self.arm_swing_to(SWING_SAFE_STEPS)
             self._arm_log("Arm parked.")
