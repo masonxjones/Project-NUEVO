@@ -3,17 +3,13 @@ import time
 import math
 import numpy as np
 
-
 from robot.robot import FirmwareState, Robot, Unit
 from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
-from robot.util import densify_polyline
 from robot.path_planner import PurePursuitPlanner
-
 
 # ---------------------------------------------------------------------------
 # Robot build configuration
 # ---------------------------------------------------------------------------
-
 
 TAG_ID = 11
 POSITION_UNIT = Unit.MM
@@ -21,42 +17,34 @@ WHEEL_DIAMETER = 74.0
 WHEEL_BASE = 333.0
 INITIAL_THETA_DEG = 90.0
 
-
 LEFT_WHEEL_MOTOR = Motor.DC_M1
 LEFT_WHEEL_DIR_INVERTED = False
 RIGHT_WHEEL_MOTOR = Motor.DC_M2
 RIGHT_WHEEL_DIR_INVERTED = True
 
-
 # ---------------------------------------------------------------------------
 # Pure Pursuit parameters
 # ---------------------------------------------------------------------------
 
-
-LOOKAHEAD_DIST = 100.0       # mm — tune as needed (Task 4: try 50, 100, 150)
-MAX_LINEAR_VEL = 80.0        # mm/s
-MAX_ANGULAR_VEL = 1.5        # rad/s
+LOOKAHEAD_DIST = 120.0       # mm
+MAX_LINEAR_VEL = 120.0       # mm/s
+MAX_ANGULAR_VEL = 2.0        # rad/s
 GOAL_TOLERANCE = 20.0        # mm
-
+PRODUCTION_THRESHOLD = 0.25  # Vision matching threshold
 
 # ---------------------------------------------------------------------------
-# Waypoints  (Task 3: densified so corners are sharper)
+# Field Coordinates
 # ---------------------------------------------------------------------------
 
+CHECKPOINT_X = 2440.0
+CHECKPOINT_Y = 3660.0
+CHECKPOINT_RADIUS = 60.0     # mm tolerance to trigger the arrival pause
 
-RAW_WAYPOINTS = [
-    (0.0,    0.0),
-    (0.0,    3660.0),
-    (610.0,  3660.0),
-    (610.0,  610.0),
-    (1525.0, 610.0),
-    (1525.0, 3660.0),
-    (2440.0, 3660.0),
-    (2440.0, 0.0),
-]
-
-
-
+DELIVERY_LOCATIONS = {
+    "A": (2440.0, 1525.0),    # Target coordinates for Customer A
+    "B": (2440.0, 1225.0),    # Target coordinates for Customer B
+    "unknown": (2440.0, 1325.0)  # Fallback coordinates
+}
 
 def configure_robot(robot: Robot) -> None:
     robot.set_unit(POSITION_UNIT)
@@ -72,16 +60,10 @@ def configure_robot(robot: Robot) -> None:
     robot.set_tracked_tag_id(TAG_ID)
     robot.enable_vision()
 
-
-
-
 def start_robot(robot: Robot) -> None:
     robot.set_state(FirmwareState.RUNNING)
     robot.reset_odometry()
     robot.wait_for_pose_update(timeout=0.2)
-
-
-
 
 def get_traffic_light(robot: Robot):
     """Return 'green', 'red', or None based on highest-confidence detection."""
@@ -92,170 +74,131 @@ def get_traffic_light(robot: Robot):
                 return color
     return None
 
-
-
-
 def run(robot: Robot) -> None:
     configure_robot(robot)
     start_robot(robot)
 
+    # State machine starts by driving straight to the customer setup area
+    state = "DRIVING_TO_CHECKPOINT"
+    print("[SYSTEM] Initializing. Driving straight to Customer Checkpoint...")
 
-    # ------------------------------------------------------------------
-    # Build densified path (Task 3 fix: adds intermediate points so the
-    # planner doesn't cut corners)
-    # ------------------------------------------------------------------
-    path_control_points = list(RAW_WAYPOINTS)
-    path1 = densify_polyline(path_control_points, spacing=20.0)
+    # Establish initial path directly to the checkpoint coordinates
+    remaining_path = [(0.0, 0.0), (CHECKPOINT_X, CHECKPOINT_Y)]
+    planner = PurePursuitPlanner(
+        lookahead_dist=LOOKAHEAD_DIST,
+        max_angular=MAX_ANGULAR_VEL,
+        goal_tolerance=GOAL_TOLERANCE,
+    )
 
-
-    planner1 = None
-    remaining_path = []
-
-
-    state = "WAIT_FOR_GREEN"
-    print("[FSM] Waiting for GREEN traffic light before starting path...")
-
+    checkpoint_stop_start = 0.0
+    detected_customer = "unknown"
+    highest_match_score = -1.0
 
     period = 1.0 / float(DEFAULT_FSM_HZ)
     next_tick = time.monotonic()
 
-
     while True:
-        # ------------------------------------------------------------------
-        # Hardware emergency stop (BTN_2)
-        # ------------------------------------------------------------------
         if robot.get_button(Button.BTN_2):
             print("BTN_2 pressed — emergency stop.")
             robot.stop()
             robot.shutdown()
             break
 
-
-        traffic_light_color = get_traffic_light(robot)
-
-
         # ==================================================================
-        # STATE: WAIT_FOR_GREEN
-        #   Hold position; LEDs off; watch for green light
+        # STATE 1: DRIVE STRAIGHT TO THE CHECKPOINT
         # ==================================================================
-        if state == "WAIT_FOR_GREEN":
-            robot.stop()
-            robot.set_led(LED.GREEN, 0)
+        if state == "DRIVING_TO_CHECKPOINT":
+            robot.set_led(LED.GREEN, 255)
             robot.set_led(LED.ORANGE, 0)
 
+            current_x, current_y, current_theta_deg = robot.get_pose()
+            current_theta_rad = math.radians(current_theta_deg)
 
-            if traffic_light_color == "green":
-                print("[VISION] Green detected — initialising Pure Pursuit planner.")
+            # Check if we are physically close enough to the checkpoint to stop
+            dist_to_checkpoint = math.sqrt((current_x - CHECKPOINT_X)**2 + (current_y - CHECKPOINT_Y)**2)
+            if dist_to_checkpoint <= CHECKPOINT_RADIUS:
+                print(f"[NAV] Arrived at customer location ({current_x:.1f}, {current_y:.1f}). Starting 5s scan...")
+                robot.stop()
+                checkpoint_stop_start = time.monotonic()
+                state = "CUSTOMER_CHECKPOINT"
+                continue
 
+            # Standard Pure Pursuit tracking mechanics
+            remaining_path = robot._advance_remaining_path(remaining_path, current_x, current_y, LOOKAHEAD_DIST)
+            cp_x, cp_y = planner._lookahead_point(current_x, current_y, remaining_path)
+            v, omega = planner.compute_velocity((current_x, current_y, current_theta_rad), remaining_path, MAX_LINEAR_VEL)
+            robot.set_velocity(v, math.degrees(omega))
 
-                planner1 = PurePursuitPlanner(
+        # ==================================================================
+        # STATE 2: SCAN FOR CUSTOMER (At the actual checkpoint)
+        # ==================================================================
+        elif state == "CUSTOMER_CHECKPOINT":
+            robot.stop() 
+            robot.set_led(LED.ORANGE, 255)
+            robot.set_led(LED.GREEN, 0)
+
+            for person in robot.get_detections("person"):
+                attributes = person.get("attributes", {})
+                if "customer_id" in attributes:
+                    customer_attr = attributes.get("customer_id", {})
+                    customer_id = customer_attr.get("value")
+                    confidence = float(customer_attr.get("score", 0.0))
+
+                    if customer_id in ("A", "B") and confidence >= PRODUCTION_THRESHOLD:
+                        if confidence > highest_match_score:
+                            highest_match_score = confidence
+                            detected_customer = customer_id
+
+            if time.monotonic() - checkpoint_stop_start >= 5.0:
+                print(f"[DECISION] Scan complete. Target: Customer {detected_customer.upper()} "
+                      f"(Confidence: {max(0.0, highest_match_score):.2f})")
+                print("[FSM] Standby for GREEN light to resume delivery run...")
+                state = "WAIT_FOR_LAUNCH_LIGHT"
+
+        # ==================================================================
+        # STATE 3: STANDBY FOR GREEN LIGHT
+        # ==================================================================
+        elif state == "WAIT_FOR_LAUNCH_LIGHT":
+            robot.stop()
+            robot.set_led(LED.ORANGE, 255)
+            robot.set_led(LED.GREEN, 0)
+
+            if get_traffic_light(robot) == "green":
+                print("[VISION] Green light detected! Re-routing straight to drop-off.")
+                
+                target_x, target_y = DELIVERY_LOCATIONS[detected_customer]
+                # Path maps a straight trajectory starting from the current checkpoint out to delivery coordinates
+                remaining_path = [(CHECKPOINT_X, CHECKPOINT_Y), (target_x, target_y)]
+                
+                planner = PurePursuitPlanner(
                     lookahead_dist=LOOKAHEAD_DIST,
                     max_angular=MAX_ANGULAR_VEL,
                     goal_tolerance=GOAL_TOLERANCE,
                 )
-                remaining_path = path1.copy()
-
-
-                print("[FSM] → MOVING")
-                state = "MOVING"
-
+                state = "MOVING_TO_DELIVERY"
 
         # ==================================================================
-        # STATE: MOVING
-        #   Follow waypoints via Pure Pursuit; pause on red light
+        # STATE 4: DRIVE DIRECTLY TO CHOSEN CUSTOMER DROP-OFF
         # ==================================================================
-        elif state == "MOVING":
-            # ---- Pause on red ----
-            if traffic_light_color == "red":
-                print("[VISION] Red light — pausing.")
+        elif state == "MOVING_TO_DELIVERY":
+            robot.set_led(LED.ORANGE, 0)
+            robot.set_led(LED.GREEN, 255)
+
+            current_x, current_y, current_theta_deg = robot.get_pose()
+            current_theta_rad = math.radians(current_theta_deg)
+
+            remaining_path = robot._advance_remaining_path(remaining_path, current_x, current_y, LOOKAHEAD_DIST)
+            cp_x, cp_y = planner._lookahead_point(current_x, current_y, remaining_path)
+            v, omega = planner.compute_velocity((current_x, current_y, current_theta_rad), remaining_path, MAX_LINEAR_VEL)
+            robot.set_velocity(v, math.degrees(omega))
+
+            if planner.CurrentTargetReached(cp_x, cp_y, current_x, current_y):
+                print("[ARRIVED] Delivery complete! Stopping robot.")
                 robot.stop()
                 robot.set_led(LED.GREEN, 0)
-                robot.set_led(LED.ORANGE, 255)
-                state = "PAUSED"
+                break
 
-
-            else:
-                robot.set_led(LED.GREEN, 255)
-                robot.set_led(LED.ORANGE, 0)
-
-
-                # Step 1: current pose
-                current_x, current_y, current_theta_deg = robot.get_pose()
-
-
-                # Step 2: heading in radians
-                current_theta_rad = math.radians(current_theta_deg)
-
-
-                # Step 3: advance (trim already-passed waypoints)
-                remaining_path = robot._advance_remaining_path(
-                    remaining_path,
-                    current_x,
-                    current_y,
-                    advance_radius_mm=LOOKAHEAD_DIST,
-                )
-
-
-                # Step 4: lookahead point
-                current_pursuit_x, current_pursuit_y = planner1._lookahead_point(
-                    current_x,
-                    current_y,
-                    waypoints=remaining_path,
-                )
-
-
-                # Step 5: compute v and ω
-                linear_velocity_cmd, angular_velocity_cmd_rad_s = planner1.compute_velocity(
-                    pose=(current_x, current_y, current_theta_rad),
-                    waypoints=remaining_path,
-                    max_linear=MAX_LINEAR_VEL,
-                )
-
-
-                # Step 6: send velocity command
-                # robot.set_velocity expects (linear mm/s, angular deg/s)
-                robot.set_velocity(
-                    linear_velocity_cmd,
-                    math.degrees(angular_velocity_cmd_rad_s),
-                )
-
-
-                # Step 7: check goal reached
-                if planner1.CurrentTargetReached(
-                    current_pursuit_x, current_pursuit_y,
-                    current_x, current_y,
-                ):
-                    print("[MOVING] Final waypoint reached — stopping.")
-                    robot.stop()
-                    robot.set_led(LED.GREEN, 0)
-                    robot.set_led(LED.ORANGE, 0)
-                    print("[FSM] → WAIT_FOR_GREEN")
-                    state = "WAIT_FOR_GREEN"
-
-
-                # Step 8: debug print
-                # print(f"Pose: ({current_x:.1f}, {current_y:.1f}, {current_theta_deg:.1f}°) "
-                #       f"| Target: ({current_pursuit_x:.1f}, {current_pursuit_y:.1f})")
-
-
-        # ==================================================================
-        # STATE: PAUSED  (red light mid-route)
-        #   Hold until green resumes; planner state is preserved
-        # ==================================================================
-        elif state == "PAUSED":
-            robot.stop()
-            robot.set_led(LED.ORANGE, 255)
-
-
-            if traffic_light_color == "green":
-                print("[VISION] Green again — resuming path.")
-                robot.set_led(LED.ORANGE, 0)
-                state = "MOVING"
-
-
-        # ------------------------------------------------------------------
-        # FSM tick rate
-        # ------------------------------------------------------------------
+        # FSM tick rate control
         next_tick += period
         sleep_s = next_tick - time.monotonic()
         if sleep_s > 0:
@@ -263,3 +206,5 @@ def run(robot: Robot) -> None:
         else:
             next_tick = time.monotonic()
 
+if __name__ == "__main__":
+    main()

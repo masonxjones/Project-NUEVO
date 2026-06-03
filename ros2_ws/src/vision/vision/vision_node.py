@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+import cv2
+import os
 
 from ament_index_python.packages import get_package_share_directory
 from bridge_interfaces.msg import VisionDetection, VisionDetectionArray
@@ -25,13 +27,10 @@ from vision.traffic_light import classify_traffic_light_color
 
 
 # User-facing COCO class filter.
-# Add standard COCO names here, matching data/yolo26n_ncnn_imgsz_416/metadata.yaml.
 CLASSES_OF_INTEREST = [
     "traffic light",
     "stop sign",
     "person",
-    # "car",
-    # "bus",BD
 ]
 
 DEFAULT_CLASS_FILTER = ",".join(CLASSES_OF_INTEREST)
@@ -55,6 +54,73 @@ def classify_person_face_lighting(person_crop) -> tuple[str, float]:
     if brightness > 0.75:
         return "bright", min(1.0, (brightness - 0.75) / 0.25)
     return "normal", max(0.0, 1.0 - (abs(brightness - 0.5) / 0.25))
+
+
+# ---------------------------------------------------------------------------
+# Customer face matcher
+# ---------------------------------------------------------------------------
+
+CUSTOMER_A_IMAGE_PATH = "/ros2_ws/src/vision/data/customer_a.jpeg"
+CUSTOMER_B_IMAGE_PATH = "/ros2_ws/src/vision/data/customer_b.jpeg"
+
+FACE_MATCH_SIZE      = (128, 128)   # resize all crops to this before comparing
+FACE_MATCH_THRESHOLD = 0.40         # minimum template match score to claim a match
+
+
+class CustomerFaceMatcher:
+    """
+    Compares a live person crop against two stored reference images using
+    template matching (spatial features). Returns 'A', 'B', or 'unknown'.
+    """
+    def __init__(self, path_a: str, path_b: str) -> None:
+        self._ref_a = self._load(path_a, "A")
+        self._ref_b = self._load(path_b, "B")
+
+    @staticmethod
+    def _load(path: str, label: str):
+        if not os.path.exists(path):
+            print(f"[FaceMatcher] WARNING: reference image for Customer {label} "
+                  f"not found at {path}")
+            return None
+        img = cv2.imread(path)
+        if img is None:
+            print(f"[FaceMatcher] WARNING: could not read image at {path}")
+            return None
+        img  = cv2.resize(img, FACE_MATCH_SIZE)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        return gray
+
+    def _get_pattern(self, crop):
+        if crop is None or crop.size == 0:
+            return None
+        resized = cv2.resize(crop, FACE_MATCH_SIZE)
+        gray    = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        return gray
+
+    def match(self, person_crop) -> tuple[str, float]:
+        if self._ref_a is None and self._ref_b is None:
+            return "unknown", 0.0
+
+        live_pattern = self._get_pattern(person_crop)
+        if live_pattern is None:
+            return "unknown", 0.0
+
+        score_a = -1.0
+        if self._ref_a is not None:
+            res_a = cv2.matchTemplate(self._ref_a, live_pattern, cv2.TM_CCOEFF_NORMED)
+            score_a = float(res_a[0][0])
+
+        score_b = -1.0
+        if self._ref_b is not None:
+            res_b = cv2.matchTemplate(self._ref_b, live_pattern, cv2.TM_CCOEFF_NORMED)
+            score_b = float(res_b[0][0])
+
+        if score_a > score_b and score_a > FACE_MATCH_THRESHOLD:
+            return "A", score_a
+        elif score_b > score_a and score_b > FACE_MATCH_THRESHOLD:
+            return "B", score_b
+        else:
+            return "unknown", max(score_a, score_b)
 
 
 class VisionNode(Node):
@@ -150,6 +216,14 @@ class VisionNode(Node):
             )
         )
 
+        # -------------------------------------------------------------------
+        # Initialize Face Matcher at startup
+        # -------------------------------------------------------------------
+        self._face_matcher = CustomerFaceMatcher(
+            CUSTOMER_A_IMAGE_PATH,
+            CUSTOMER_B_IMAGE_PATH,
+        )
+
     def _infer_yolo_detections(self, frame) -> list[DetectedObject]:
         return self._detector.predict(frame)
 
@@ -218,8 +292,6 @@ class VisionNode(Node):
                     if detection.class_name == "traffic light":
                         traffic_light_crop = object_crop
                         color_label, color_score = classify_traffic_light_color(traffic_light_crop)
-                        
-                        # Add attribute to the detection result; we add color here as an example
                         detection.add_attribute("color", color_label, color_score)
 
                     elif detection.class_name == "stop sign":
@@ -231,6 +303,12 @@ class VisionNode(Node):
                         person_crop = object_crop
                         face_lighting_label, face_lighting_score = classify_person_face_lighting(person_crop)
                         detection.add_attribute("face_lighting", face_lighting_label, face_lighting_score)
+                        
+                        # -------------------------------------------------------------------
+                        # Add customer matching attribute to the person detection
+                        # -------------------------------------------------------------------
+                        customer_id, match_score = self._face_matcher.match(person_crop)
+                        detection.add_attribute("customer_id", customer_id, float(match_score))
                 
                 all_detections = yolo_detections + yellow_block_detections
 
