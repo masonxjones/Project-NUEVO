@@ -454,6 +454,7 @@ import numpy as np
 from robot.robot import FirmwareState, Robot, Unit
 from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
 from robot.util import densify_polyline
+from robot.robot_impl.burger_assembly import BurgerAssemblyMixin
 
 
 # ---------------------------------------------------------------------------
@@ -506,11 +507,17 @@ RAW_WAYPOINTS = [
     (2240.0, 0.0),
 ]
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
+# ── Assembly trigger ──────────────────────────────────────────────────────────
+# Robot transitions from MOVING → ASSEMBLY when it crosses this Y position
+# on the first straight (heading north along x=0).
+# Set to ~500 mm — just past where the table sits beside the path.
+ASSEMBLY_TRIGGER_Y_MM   = 500.0
+ASSEMBLY_TRIGGER_X_MAX  = 50.0   # only trigger while still on the x=0 leg
+                                  # (prevents re-triggering on later laps)
+ 
+ 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+ 
 def configure_robot(robot: Robot) -> None:
     robot.set_unit(POSITION_UNIT)
     robot.set_odometry_parameters(
@@ -525,131 +532,190 @@ def configure_robot(robot: Robot) -> None:
     robot.set_tracked_tag_id(TAG_ID)
     robot.enable_vision()
     robot.enable_lidar()
-
-
+ 
+ 
 def start_robot(robot: Robot) -> None:
     robot.set_state(FirmwareState.RUNNING)
     robot.reset_odometry()
     robot.wait_for_pose_update(timeout=0.2)
-
-
+ 
+ 
 def get_traffic_light(robot: Robot):
-    """Return 'green', 'red', or None."""
     for detection in robot.get_detections("traffic light"):
         if float(detection.get("confidence", 0.0)) >= 0.50:
             color = detection.get("attributes", {}).get("color", {}).get("value")
             if color in ("red", "green"):
                 return color
     return None
-
-
-def setup_planner(robot: Robot, path: list) -> None:
-    robot._nav_follow_pp_path(
-        lookahead_distance=LOOKAHEAD_DIST,
-        max_linear_speed=MAX_LINEAR_VEL,
-        max_angular_speed=MAX_ANGULAR_VEL,
-        goal_tolerance=GOAL_TOLERANCE,
-        obstacles_range=OBS_RANGE_MM,
-        view_angle=VIEW_ANGLE_RAD,
-        safe_dist=SAFE_DIST_MM,
-        avoidance_delay=AVOIDANCE_DELAY,
-        alpha_Ld=ALPHA_LD,
-        offset=D_OFFSET_MM,
-        lane_width=LANE_WIDTH_MM,
-        obstacle_avoidance=True,
-        x_L=X_L_MM,
-    )
-    robot.planner.current_lane = 'Center'  # start with no offset applied
-    robot.planner.set_path(path)
-
-
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-
+ 
+ 
+# ── Main FSM ──────────────────────────────────────────────────────────────────
+ 
 def run(robot: Robot) -> None:
     configure_robot(robot)
     start_robot(robot)
-
-    path = densify_polyline(list(RAW_WAYPOINTS), spacing=20.0)
-
-    state = "WAIT_FOR_GREEN"
-    print("[FSM] Waiting for GREEN traffic light...")
-
+ 
+    path1 = densify_polyline(list(RAW_WAYPOINTS), spacing=20.0)
+ 
+    planner1       = None
+    remaining_path = []
+    assembly_done  = False   # only assemble once per run
+ 
+    state     = "WAIT_FOR_GREEN"
     period    = 1.0 / float(DEFAULT_FSM_HZ)
     next_tick = time.monotonic()
-
+ 
+    print("[FSM] Waiting for GREEN traffic light...")
+ 
     while True:
-        now = time.monotonic()
-
-        # ------------------------------------------------------------------
-        # Emergency stop
-        # ------------------------------------------------------------------
+ 
+        # ── Emergency stop ────────────────────────────────────────────────────
         if robot.get_button(Button.BTN_2):
             print("BTN_2 — emergency stop.")
             robot.stop()
             robot.shutdown()
             break
-
+ 
         traffic_light_color = get_traffic_light(robot)
-
-        # ==================================================================
-        # STATE: WAIT_FOR_GREEN
-        # ==================================================================
+ 
+        # ══════════════════════════════════════════════════════════════════════
+        # WAIT_FOR_GREEN
+        # ══════════════════════════════════════════════════════════════════════
         if state == "WAIT_FOR_GREEN":
             robot.stop()
             robot.set_led(LED.GREEN, 0)
-            robot.set_led(LED.ORANGE, 255)
-
+            robot.set_led(LED.ORANGE, 0)
+ 
             if traffic_light_color == "green":
-                print("[VISION] Green — setting up planner and starting.")
-                setup_planner(robot, path.copy())
-                print("[FSM] → MOVING")
+                print("[VISION] Green — starting path.")
+                planner1 = PurePursuitPlanner(
+                    lookahead_dist=LOOKAHEAD_DIST,
+                    max_angular=MAX_ANGULAR_VEL,
+                    goal_tolerance=GOAL_TOLERANCE,
+                )
+                remaining_path = path1.copy()
                 state = "MOVING"
-
-        # ==================================================================
-        # STATE: MOVING
-        # ==================================================================
+                print("[FSM] → MOVING")
+ 
+        # ══════════════════════════════════════════════════════════════════════
+        # MOVING
+        # ══════════════════════════════════════════════════════════════════════
         elif state == "MOVING":
+ 
+            # ── Red light pause ───────────────────────────────────────────────
             if traffic_light_color == "red":
                 print("[VISION] Red — pausing.")
                 robot.stop()
                 robot.set_led(LED.GREEN, 0)
                 robot.set_led(LED.ORANGE, 255)
                 state = "PAUSED"
-
+ 
             else:
                 robot.set_led(LED.GREEN, 255)
                 robot.set_led(LED.ORANGE, 0)
-
-                result = robot._nav_follow_pp_path_loop()
-                print(f"[DEBUG] loop result={result} | pose={robot.get_pose()} | path_len={len(robot.planner.remaining_path)} | next_wp={robot.planner.remaining_path[0] if robot.planner.remaining_path else 'EMPTY'}")
-
-                if result == "IDLE":
-                    print("[MOVING] Goal reached — stopping.")
+ 
+                current_x, current_y, current_theta_deg = robot.get_pose()
+                current_theta_rad = math.radians(current_theta_deg)
+ 
+                # ── Assembly trigger ──────────────────────────────────────────
+                # Fire once, on the first northbound leg (x ≈ 0), when y
+                # crosses ASSEMBLY_TRIGGER_Y_MM.
+                if (
+                    not assembly_done
+                    and current_y >= ASSEMBLY_TRIGGER_Y_MM
+                    and abs(current_x) <= ASSEMBLY_TRIGGER_X_MAX
+                ):
+                    print(
+                        f"[FSM] Assembly trigger at "
+                        f"({current_x:.0f}, {current_y:.0f}) mm → ASSEMBLY"
+                    )
                     robot.stop()
-                    robot.set_led(LED.GREEN, 0)
-                    robot.set_led(LED.ORANGE, 0)
-                    print("[FSM] → WAIT_FOR_GREEN")
-                    state = "WAIT_FOR_GREEN"
-
-        # ==================================================================
-        # STATE: PAUSED
-        # ==================================================================
+                    state = "ASSEMBLY"
+ 
+                else:
+                    # ── Pure Pursuit step ─────────────────────────────────────
+                    remaining_path = robot._advance_remaining_path(
+                        remaining_path, current_x, current_y,
+                        advance_radius_mm=LOOKAHEAD_DIST,
+                    )
+                    current_pursuit_x, current_pursuit_y = (
+                        planner1._lookahead_point(
+                            current_x, current_y, waypoints=remaining_path
+                        )
+                    )
+                    linear_vel, angular_vel = planner1.compute_velocity(
+                        pose=(current_x, current_y, current_theta_rad),
+                        waypoints=remaining_path,
+                        max_linear=MAX_LINEAR_VEL,
+                    )
+                    robot.set_velocity(linear_vel, math.degrees(angular_vel))
+ 
+                    if planner1.CurrentTargetReached(
+                        current_pursuit_x, current_pursuit_y,
+                        current_x, current_y,
+                    ):
+                        print("[MOVING] Final waypoint reached.")
+                        robot.stop()
+                        robot.set_led(LED.GREEN, 0)
+                        robot.set_led(LED.ORANGE, 0)
+                        state = "DONE"
+                        print("[FSM] → DONE")
+ 
+        # ══════════════════════════════════════════════════════════════════════
+        # ASSEMBLY  — burger pick and stack sequence
+        # ══════════════════════════════════════════════════════════════════════
+        elif state == "ASSEMBLY":
+            print("[FSM] Starting burger assembly...")
+            robot.set_led(LED.GREEN, 0)
+            robot.set_led(LED.ORANGE, 200)
+ 
+            try:
+                # assemble_burger() blocks until the full sequence is done.
+                # It handles all arm moves, driving between pieces, and placing.
+                robot.assemble_burger(
+                    home_on_start  = False,
+                    park_on_finish = True,   # parks arm clear of lidar
+                )
+                assembly_done = True
+                print("[FSM] Assembly complete — resuming path.")
+ 
+            except Exception as e:
+                print(f"[FSM] Assembly error: {e} — resuming path anyway.")
+                assembly_done = True   # don't retry on error
+                try:
+                    robot.arm_safe_height()
+                    robot.arm_open_gripper()
+                except Exception:
+                    pass
+ 
+            robot.set_led(LED.GREEN, 255)
+            robot.set_led(LED.ORANGE, 0)
+            state = "MOVING"
+            print("[FSM] → MOVING (resumed)")
+ 
+        # ══════════════════════════════════════════════════════════════════════
+        # PAUSED  — red light mid-route
+        # ══════════════════════════════════════════════════════════════════════
         elif state == "PAUSED":
             robot.stop()
             robot.set_led(LED.ORANGE, 255)
-
+ 
             if traffic_light_color == "green":
-                print("[VISION] Green — resuming.")
+                print("[VISION] Green again — resuming.")
                 robot.set_led(LED.ORANGE, 0)
                 state = "MOVING"
-
-        # ------------------------------------------------------------------
-        # Tick rate
-        # ------------------------------------------------------------------
+                print("[FSM] → MOVING")
+ 
+        # ══════════════════════════════════════════════════════════════════════
+        # DONE
+        # ══════════════════════════════════════════════════════════════════════
+        elif state == "DONE":
+            robot.stop()
+            break
+ 
+        # ── Tick rate control ─────────────────────────────────────────────────
         next_tick += period
-        sleep_s = next_tick - now
+        sleep_s = next_tick - time.monotonic()
         if sleep_s > 0:
             time.sleep(sleep_s)
         else:

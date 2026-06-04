@@ -62,7 +62,7 @@ PATTY_RED_HIGH_2 = (180, 255, 255)
 # ── Bun (yellow) HSV ranges ───────────────────────────────────────────────
 # Yellow sits around H=20–35 in OpenCV HSV (0–180 scale).
 # Based on detect_yellow_block — tune S/V floors for your lighting.
-BUN_YELLOW_LOW  = (18,  80,  80)
+BUN_YELLOW_LOW  = (18,  180,  150)
 BUN_YELLOW_HIGH = (38, 255, 255)
 
 # ── Morphology kernel ─────────────────────────────────────────────────────
