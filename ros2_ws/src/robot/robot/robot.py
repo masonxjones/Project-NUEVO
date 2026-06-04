@@ -130,7 +130,7 @@ from robot.robot_impl.legacy import LegacyMixin
 from robot.robot_impl.gripper import GripperMixin
 from robot.robot_impl.burger_assembly import BurgerAssemblyMixin
 
-class Robot(HardwareMixin, SensorsMixin, NavigationMixin, LegacyMixin, GripperMixin):
+class Robot(HardwareMixin, SensorsMixin, NavigationMixin, LegacyMixin, GripperMixin, BurgerAssemblyMixin):
     """
     Layer-1 abstraction over all bridge ROS topics and services.
 
@@ -138,7 +138,6 @@ class Robot(HardwareMixin, SensorsMixin, NavigationMixin, LegacyMixin, GripperMi
     All length/velocity inputs and outputs respect the unit system set at
     construction time (default: mm). Angles are always in degrees for the
     public API; internally radians are used.
-
     Motor IDs are 1-based (1–4). Stepper IDs are 1-based (1–4).
     Servo channels are 1-based (1–16).
     Button IDs are 1-based (1–10). Limit IDs are 1-based (1–8).
