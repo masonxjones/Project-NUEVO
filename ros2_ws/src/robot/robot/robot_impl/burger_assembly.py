@@ -253,7 +253,7 @@ class BurgerAssemblyMixin:
         current_swing = SWING_SCAN_START
         found = False
 
-        while current_swing <= SWING_SCAN_END:
+        while current_swing <= SWING_SCAN_END and current_swing <= 450:
             self.arm_swing_to(current_swing)
             time.sleep(SWING_SCAN_PAUSE)
             if self._get_any_piece_detection() is not None:
