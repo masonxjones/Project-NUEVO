@@ -128,6 +128,7 @@ from robot.robot_impl.legacy import LegacyMixin
 # Robot
 # =============================================================================
 from robot.robot_impl.gripper import GripperMixin
+from robot.robot_impl.burger_assembly import BurgerAssemblyMixin
 
 class Robot(HardwareMixin, SensorsMixin, NavigationMixin, LegacyMixin, GripperMixin):
     """
