@@ -219,7 +219,6 @@
 # from robot.robot import FirmwareState, Robot, Unit
 # from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
 # from robot.util import densify_polyline
-# from robot.path_planner import PurePursuitPlanner
 
 
 # # ---------------------------------------------------------------------------
@@ -455,6 +454,8 @@ from robot.robot import FirmwareState, Robot, Unit
 from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
 from robot.util import densify_polyline
 from robot.robot_impl.burger_assembly import BurgerAssemblyMixin
+from robot.path_planner import PurePursuitPlanner
+
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +479,7 @@ RIGHT_WHEEL_DIR_INVERTED = True
 # ---------------------------------------------------------------------------
 
 LOOKAHEAD_DIST  = 200.0          # increased — robot looks further ahead, smoother curves
-MAX_LINEAR_VEL  = 100.0          # keep the same
+MAX_LINEAR_VEL  = 50.0          # keep the same
 MAX_ANGULAR_VEL = 0.8            # reduced — limits how sharply it can turn
 GOAL_TOLERANCE  = 20.0
 

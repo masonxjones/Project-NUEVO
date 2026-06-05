@@ -40,7 +40,7 @@ STEPPER_SWING           = 2
 
 # ── Elevator positions (steps — MORE steps = LOWER) ──────────────────────
 ELEVATOR_SAFE_STEPS     = 0      # fully raised, safe to drive / swing
-ELEVATOR_BUN_PICK       = 800    # depth to reach the top bun
+ELEVATOR_BUN_PICK       = 4000    # depth to reach the top bun
 ELEVATOR_PATTY_PICK     = 850    # depth to reach the patty
                                  # (slightly lower — patty sits on table)
 ELEVATOR_STACK_PLACE    = 600    # depth to lower stack onto bottom bun
