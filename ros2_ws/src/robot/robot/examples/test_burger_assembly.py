@@ -1,21 +1,15 @@
 """
 ros2_ws/src/robot/robot/examples/test_burger_assembly.py
 ─────────────────────────────────────────────────────────
-Sequential burger assembly test.
+Step-through test for the hardcoded burger assembly sequence.
 
 Run inside Docker:
     source /opt/ros/jazzy/setup.bash
     source /ros2_ws/install/setup.bash
     python3 -u src/robot/robot/examples/test_burger_assembly.py
 
-TUNE BEFORE RUNNING (all in burger_assembly.py):
-    ELEVATOR_BUN_PICK     — steps to reach the top bun
-    ELEVATOR_PATTY_PICK   — steps to reach the patty
-    ELEVATOR_STACK_PLACE  — steps to lower stack onto bottom bun
-    DRIVE_TO_PATTY_MM     — distance from bun to patty
-    DRIVE_TO_STACK_MM     — distance from patty to bottom bun
-    SWING_STACK_STEPS     — swing position above the bottom bun
-    PIXELS_TO_STEPS_GAIN  — tune until arm centres correctly on camera
+Position the robot beside the table before running.
+Press Enter at each prompt to advance — Ctrl+C to abort at any time.
 """
 
 import threading
@@ -26,15 +20,15 @@ from rclpy.node import Node
 
 from robot.robot import Robot
 from robot.robot_impl.burger_assembly import (
-    ELEVATOR_BUN_PICK,
-    ELEVATOR_PATTY_PICK,
-    ELEVATOR_STACK_PLACE,
-    DRIVE_TO_PATTY_MM,
-    DRIVE_TO_STACK_MM,
+    SWING_PICK_STEPS,
+    SWING_HOME,
+    ELEVATOR_HOME,
+    ELEVATOR_PICK_STEPS,
+    ELEVATOR_PLACE_BUN,
+    ELEVATOR_PLACE_STACK,
     GRIP_US,
-    SWING_STACK_STEPS,
-    SWING_SCAN_START,
-    SWING_SCAN_END,
+    GRIPPER_OPEN_US,
+    PIECE_SPACING_MM,
 )
 
 HOME_ON_START = False
@@ -49,87 +43,100 @@ def main() -> None:
     spin_thread.start()
     time.sleep(1.0)
 
-    print("\n═══ Sequential Burger Assembly Test ═══")
-    print(f"Grip pulse:          {GRIP_US} µs (all pieces)")
-    print(f"Elevator — bun:      {ELEVATOR_BUN_PICK} steps")
-    print(f"Elevator — patty:    {ELEVATOR_PATTY_PICK} steps")
-    print(f"Elevator — place:    {ELEVATOR_STACK_PLACE} steps")
-    print(f"Drive bun→patty:     {DRIVE_TO_PATTY_MM} mm")
-    print(f"Drive patty→stack:   {DRIVE_TO_STACK_MM} mm")
-    print(f"Swing scan range:    {SWING_SCAN_START}→{SWING_SCAN_END} steps")
-    print(f"Swing stack pos:     {SWING_STACK_STEPS} steps")
+    print("\n═══ Burger Assembly Step-Through Test ═══")
+    print(f"Swing pick position:   {SWING_PICK_STEPS} steps")
+    print(f"Elevator pick depth:   {ELEVATOR_PICK_STEPS} steps")
+    print(f"Elevator place bun:    {ELEVATOR_PLACE_BUN} steps")
+    print(f"Elevator place stack:  {ELEVATOR_PLACE_STACK} steps")
+    print(f"Grip pulse:            {GRIP_US} µs")
+    print(f"Piece spacing:         {PIECE_SPACING_MM} mm")
     print()
 
     try:
         # ── Pre-checks ────────────────────────────────────────────────────────
         input("[ PRE-CHECK ]  Press Enter to verify gripper open/close...")
-        robot.open_gripper()
+        robot.arm_open_gripper()
         time.sleep(0.4)
-        robot.close_gripper()
+        robot.arm_grip()
         time.sleep(0.4)
-        robot.open_gripper()
+        robot.arm_open_gripper()
         print("  ✓ Gripper OK.\n")
-
-        input("[ PRE-CHECK ]  Press Enter to raise elevator to safe height...")
-        robot.arm_safe_height()
-        print("  ✓ Safe height OK.\n")
 
         if HOME_ON_START:
             input("[ HOMING ]  Press Enter to home both axes...")
             robot.arm_home()
             print("  ✓ Homing complete.\n")
 
-        # ── Camera check ──────────────────────────────────────────────────────
-        input("[ CAMERA ]  Press Enter to sweep for any piece (verify camera)...")
-        robot.arm_safe_height()
-        swing = robot.arm_sweep_and_align("any piece")
-        if swing is not None:
-            print(f"  ✓ Piece found and centred at swing={swing} steps.\n")
-        else:
-            print("  ✗ No piece found — check camera / vision node.\n")
-        robot.arm_safe_height()
-
-        # ── Step-by-step test ─────────────────────────────────────────────────
-        input("[ STEP 1 ]  Press Enter to pick the TOP BUN...")
-        robot.arm_safe_height()
-        aligned = robot.arm_sweep_and_align("top bun")
-        if aligned:
-            robot.arm_open_gripper()
-            robot.arm_elevator_to(ELEVATOR_BUN_PICK)
-            robot.arm_grip()
-            robot.arm_safe_height()
-            print("  ✓ Top bun picked.\n")
-        else:
-            print("  ✗ Bun not found — check placement and camera.\n")
-
-        input("[ STEP 2 ]  Press Enter to drive to patty and pick patty + bun...")
-        robot._drive_forward(DRIVE_TO_PATTY_MM)
-        robot.arm_elevator_to(ELEVATOR_PATTY_PICK)
-        robot.arm_grip()
-        robot.arm_safe_height()
-        print("  ✓ Patty + bun picked.\n")
-
-        input("[ STEP 3 ]  Press Enter to drive to bottom bun and place stack...")
-        robot._drive_forward(DRIVE_TO_STACK_MM)
-        robot.arm_swing_to(SWING_STACK_STEPS)
-        robot.arm_elevator_to(ELEVATOR_STACK_PLACE)
+        # ── Step 1: Pick top bun ──────────────────────────────────────────────
+        input("[ STEP 1 ]  Press Enter — swing to pick position and pick TOP BUN...")
         robot.arm_open_gripper()
-        robot.arm_safe_height()
-        print("  ✓ Stack placed on bottom bun.\n")
+        robot.arm_swing_to(SWING_PICK_STEPS)
+        print(f"  Arm swung to {SWING_PICK_STEPS} steps.")
+        robot.arm_elevator_to(ELEVATOR_PICK_STEPS)
+        print(f"  Arm lowered to {ELEVATOR_PICK_STEPS} steps.")
+        robot.arm_grip()
+        robot.arm_elevator_to(ELEVATOR_HOME)
+        print("  ✓ Top bun picked — elevator at home.\n")
 
-        # ── Full run ──────────────────────────────────────────────────────────
+        # ── Step 2: Drive to patty ────────────────────────────────────────────
+        input(f"[ STEP 2a ]  Press Enter — drive {PIECE_SPACING_MM:.0f}mm to patty...")
+        robot._drive_forward(PIECE_SPACING_MM)
+        print("  ✓ At patty position.\n")
+
+        input("[ STEP 2b ]  Press Enter — lower and drop bun onto patty...")
+        robot.arm_swing_to(SWING_PICK_STEPS)
+        robot.arm_elevator_to(ELEVATOR_PLACE_BUN)
+        robot.arm_open_gripper()
+        time.sleep(0.3)
+        print("  ✓ Bun dropped on patty.\n")
+
+        input("[ STEP 2c ]  Press Enter — lower to pick bun + patty together...")
+        robot.arm_elevator_to(ELEVATOR_PICK_STEPS)
+        robot.arm_grip()
+        robot.arm_elevator_to(ELEVATOR_HOME)
+        print("  ✓ Bun + patty picked.\n")
+
+        # ── Step 3: Drive to bottom bun ───────────────────────────────────────
+        input(f"[ STEP 3a ]  Press Enter — drive {PIECE_SPACING_MM:.0f}mm to bottom bun...")
+        robot._drive_forward(PIECE_SPACING_MM)
+        print("  ✓ At bottom bun position.\n")
+
+        input("[ STEP 3b ]  Press Enter — lower and drop bun+patty onto bottom bun...")
+        robot.arm_swing_to(SWING_PICK_STEPS)
+        robot.arm_elevator_to(ELEVATOR_PLACE_STACK)
+        robot.arm_open_gripper()
+        time.sleep(0.3)
+        print("  ✓ Bun+patty dropped on bottom bun.\n")
+
+        input("[ STEP 3c ]  Press Enter — lower to pick full stack...")
+        robot.arm_elevator_to(ELEVATOR_PICK_STEPS)
+        robot.arm_grip()
+        robot.arm_elevator_to(ELEVATOR_HOME)
+        print("  ✓ Full stack picked.\n")
+
+        # ── Step 4: Return arm to home ────────────────────────────────────────
+        input("[ STEP 4 ]  Press Enter — return arm to home position...")
+        robot.arm_swing_to(SWING_HOME)
+        print(f"  ✓ Arm returned to home (swing={SWING_HOME}, elevator={ELEVATOR_HOME}).\n")
+
+        print("═══ All steps complete! ═══")
+        print("If all motions looked correct, run the full sequence:\n")
         input("[ FULL RUN ]  Press Enter to run the COMPLETE sequence from scratch...")
-        robot.assemble_burger(
-            home_on_start  = False,
-            park_on_finish = True,
-        )
-        print("\n  ✓ Burger assembly complete!\n")
+
+        # Reset arm first
+        robot.arm_open_gripper()
+        robot.arm_elevator_to(ELEVATOR_HOME)
+        robot.arm_swing_to(SWING_HOME)
+
+        robot.assemble_burger(home_on_start=False)
+        print("\n  ✓ Full burger assembly complete!\n")
 
     except KeyboardInterrupt:
-        print("\nAborted — raising arm and stopping robot...")
+        print("\nAborted — returning arm to home...")
         try:
             robot.stop()
-            robot.arm_safe_height()
+            robot.arm_elevator_to(ELEVATOR_HOME)
+            robot.arm_swing_to(SWING_HOME)
             robot.arm_open_gripper()
         except Exception:
             pass
