@@ -455,13 +455,6 @@ from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
 from robot.util import densify_polyline
 from robot.robot_impl.burger_assembly import BurgerAssemblyMixin
 from robot.path_planner import PurePursuitPlanner
-from robot.robot_impl.burger_assembly import (
-    ELEVATOR_SAFE_STEPS,
-    ELEVATOR_HOME,
-    SWING_PICK_STEPS,
-    SWING_HOME,
-    PIECE_SPACING_MM,
-)
 
 
 
