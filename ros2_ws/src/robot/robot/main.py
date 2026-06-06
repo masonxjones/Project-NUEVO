@@ -455,6 +455,13 @@ from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
 from robot.util import densify_polyline
 from robot.robot_impl.burger_assembly import BurgerAssemblyMixin
 from robot.path_planner import PurePursuitPlanner
+from robot.robot_impl.burger_assembly import (
+    ELEVATOR_SAFE_STEPS,
+    ELEVATOR_HOME,
+    SWING_PICK_STEPS,
+    SWING_HOME,
+    PIECE_SPACING_MM,
+)
 
 
 
@@ -665,34 +672,33 @@ def run(robot: Robot) -> None:
         # ══════════════════════════════════════════════════════════════════════
         # ASSEMBLY  — burger pick and stack sequence
         # ══════════════════════════════════════════════════════════════════════
+                
         elif state == "ASSEMBLY":
             print("[FSM] Starting burger assembly...")
             robot.set_led(LED.GREEN, 0)
             robot.set_led(LED.ORANGE, 200)
- 
+            
             try:
-                # assemble_burger() blocks until the full sequence is done.
-                # It handles all arm moves, driving between pieces, and placing.
-                robot.assemble_burger(
-                    home_on_start  = False,
-                    park_on_finish = True,   # parks arm clear of lidar
-                )
-                assembly_done = True
-                print("[FSM] Assembly complete — resuming path.")
- 
+              robot.assemble_burger(home_on_start=False)
+              try:
+                 robot.arm_safe_height()
+              except Exception:
+                 pass
+              assembly_done = True
+              print("[FSM] Assembly complete — resuming path.")
             except Exception as e:
-                print(f"[FSM] Assembly error: {e} — resuming path anyway.")
-                assembly_done = True   # don't retry on error
-                try:
-                    robot.arm_safe_height()
-                    robot.arm_open_gripper()
-                except Exception:
+               print(f"[FSM] Assembly error: {e} — resuming path anyway.")
+               assembly_done = True
+               try:
+                  robot.arm_safe_height()
+                  robot.arm_open_gripper()
+               except Exception:
                     pass
- 
             robot.set_led(LED.GREEN, 255)
             robot.set_led(LED.ORANGE, 0)
             state = "MOVING"
             print("[FSM] → MOVING (resumed)")
+              
  
         # ══════════════════════════════════════════════════════════════════════
         # PAUSED  — red light mid-route
