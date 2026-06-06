@@ -512,7 +512,7 @@ RAW_WAYPOINTS = [
 # Robot transitions from MOVING → ASSEMBLY when it crosses this Y position
 # on the first straight (heading north along x=0).
 # Set to ~500 mm — just past where the table sits beside the path.
-ASSEMBLY_TRIGGER_Y_MM   = 500.0
+ASSEMBLY_TRIGGER_Y_MM = 842.9   # 500.0 + 342.9 (13.5 inches)
 ASSEMBLY_TRIGGER_X_MAX  = 50.0   # only trigger while still on the x=0 leg
                                   # (prevents re-triggering on later laps)
  

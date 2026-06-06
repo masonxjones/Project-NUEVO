@@ -364,15 +364,15 @@ class BurgerAssemblyMixin:
 
         self.arm_swing_to(SWING_PICK_STEPS)           # swing out ONCE at the start
         self.arm_open_gripper()                        # open over piece
-        time.sleep(4)
+        time.sleep(2)
         self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
-        time.sleep(7)
+        time.sleep(6)
         self.arm_grip()                                # grip bun
-        time.sleep(3)
+        time.sleep(4)
         self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0 — swing stays out
         time.sleep(2)
         self._arm_log("Top bun picked ✓")
-        time.sleep(2)
+        time.sleep(3)
 
 # ── STEP 2: Drive to patty, drop bun, pick bun + patty ───────────────
         self._arm_log("── Step 2/4: Drive to patty → drop bun → pick bun+patty ──")
@@ -390,7 +390,7 @@ class BurgerAssemblyMixin:
         time.sleep(2)
         self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0 — swing stays out
         self._arm_log("Bun + patty picked ✓")
-        time.sleep(1)
+        time.sleep(5)
 
 # ── STEP 3: Drive to bottom bun, drop stack, pick full burger ─────────
         self._arm_log("── Step 3/4: Drive to bottom bun → drop stack → pick full stack ──")
@@ -399,13 +399,13 @@ class BurgerAssemblyMixin:
 
         # no arm_swing_to here — arm is already over the table
         self.arm_elevator_to(ELEVATOR_PLACE_STACK)    # lower to 2400
-        time.sleep(3)
+        time.sleep(4)
         self.arm_open_gripper()                        # drop bun+patty onto bottom bun
         time.sleep(3)
         self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
-        time.sleep(3)
+        time.sleep(5)
         self.arm_grip()                                # grip full stack
-        time.sleep(1)
+        time.sleep(3)
         self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0
         time.sleep(5)
 
