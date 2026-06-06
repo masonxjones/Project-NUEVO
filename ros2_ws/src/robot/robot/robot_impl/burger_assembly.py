@@ -55,6 +55,8 @@ ELEVATOR_BUN_PICK       = 800    # depth to reach the top bun
 ELEVATOR_PATTY_PICK     = 850    # depth to reach the patty
                                  # (slightly lower — patty sits on table)
 ELEVATOR_STACK_PLACE    = 600    # depth to lower stack onto bottom bun
+ELEVATOR_PICK_STEPS     = 4600
+ELEVATOR_HOME           = 0
 
 SWING_HOME              = 0       # parked — clear of lidar
 SWING_PICK_STEPS        = -420    # arm position over the table for all picks/places
