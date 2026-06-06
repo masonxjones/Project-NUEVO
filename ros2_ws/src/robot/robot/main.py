@@ -473,6 +473,8 @@ LEFT_WHEEL_DIR_INVERTED  = False
 RIGHT_WHEEL_MOTOR        = Motor.DC_M2
 RIGHT_WHEEL_DIR_INVERTED = True
 
+# ── Swing scan 
+TRAFFIC_LIGHT_SWING_STEPS = 100  # ← TUNE: steps to swing arm toward traffic light
 
 # ---------------------------------------------------------------------------
 # Pure Pursuit + Obstacle Avoidance parameters
@@ -582,13 +584,29 @@ def run(robot: Robot) -> None:
         # ══════════════════════════════════════════════════════════════════════
         # WAIT_FOR_GREEN
         # ══════════════════════════════════════════════════════════════════════
+      # ══════════════════════════════════════════════════════════════════════
+        # WAIT_FOR_GREEN
+        # ══════════════════════════════════════════════════════════════════════
         if state == "WAIT_FOR_GREEN":
             robot.stop()
             robot.set_led(LED.GREEN, 0)
             robot.set_led(LED.ORANGE, 0)
- 
+
+            # Swing arm to face traffic light so camera can see it
+            try:
+                robot.arm_elevator_to(ELEVATOR_HOME)           # make sure elevator is raised
+                robot.arm_swing_to(TRAFFIC_LIGHT_SWING_STEPS)  # ← TUNE: aim at light
+            except Exception as e:
+                print(f"[WARN] Arm swing for traffic light failed: {e}")
+
             if traffic_light_color == "green":
                 print("[VISION] Green — starting path.")
+                # Return arm to safe home before driving
+                try:
+                    robot.arm_swing_to(SWING_HOME)
+                except Exception as e:
+                    print(f"[WARN] Arm return to home failed: {e}")
+
                 planner1 = PurePursuitPlanner(
                     lookahead_dist=LOOKAHEAD_DIST,
                     max_angular=MAX_ANGULAR_VEL,
@@ -597,7 +615,7 @@ def run(robot: Robot) -> None:
                 remaining_path = path1.copy()
                 state = "MOVING"
                 print("[FSM] → MOVING")
- 
+               
         # ══════════════════════════════════════════════════════════════════════
         # MOVING
         # ══════════════════════════════════════════════════════════════════════
