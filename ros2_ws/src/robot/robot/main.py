@@ -455,7 +455,7 @@ from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
 from robot.util import densify_polyline
 from robot.robot_impl.burger_assembly import BurgerAssemblyMixin
 from robot.path_planner import PurePursuitPlanner
-
+from robot.examples.burger_delivery.py import BurgerDeliveryMixin
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +517,8 @@ RAW_WAYPOINTS = [
 ASSEMBLY_TRIGGER_Y_MM = 842.9   # 500.0 + 342.9 (13.5 inches)
 ASSEMBLY_TRIGGER_X_MAX  = 50.0   # only trigger while still on the x=0 leg
                                   # (prevents re-triggering on later laps)
+DELIVERY_TRIGGER_Y_MM  = 1200.0   # ← TUNE: Y position to trigger delivery
+DELIVERY_TRIGGER_X_MIN = 2000.0     # only fire on the x=2240 leg
  
  
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -563,6 +565,7 @@ def run(robot: Robot) -> None:
     planner1       = None
     remaining_path = []
     assembly_done  = False   # only assemble once per run
+    delivery_done = False
  
     state     = "WAIT_FOR_GREEN"
     period    = 1.0 / float(DEFAULT_FSM_HZ)
@@ -650,6 +653,19 @@ def run(robot: Robot) -> None:
                     )
                     robot.stop()
                     state = "ASSEMBLY"
+                  
+                if (
+                    assembly_done
+                    and not delivery_done
+                    and current_y <= DELIVERY_TRIGGER_Y_MM
+                    and abs(current_x) >= DELIVERY_TRIGGER_X_MAX
+                ):
+                    print(
+                        f"[FSM] Delivery trigger at "
+                        f"({current_x:.0f}, {current_y:.0f}) mm → DELIVERY"
+                    )
+                    robot.stop()
+                    state = "DELIVERY"
  
                 else:
                     # ── Pure Pursuit step ─────────────────────────────────────
@@ -710,7 +726,32 @@ def run(robot: Robot) -> None:
             state = "MOVING"
             print("[FSM] → MOVING (resumed)")
               
+       # ══════════════════════════════════════════════════════════════════════
+        # DELIVERY  — drive to customer and release burger
+        # ══════════════════════════════════════════════════════════════════════
+        elif state == "DELIVERY":
+            print(f"[FSM] Starting burger delivery to Customer {detected_customer}...")
+            robot.set_led(LED.GREEN, 0)
+            robot.set_led(LED.ORANGE, 200)
  
+            try:
+                robot.deliver_burger(customer=detected_customer)
+                delivery_done = True
+                print("[FSM] Delivery complete — resuming path.")
+            except Exception as e:
+                print(f"[FSM] Delivery error: {e} — resuming path anyway.")
+                delivery_done = True
+                try:
+                    robot.arm_safe_height()
+                    robot.arm_open_gripper()
+                    robot.arm_swing_to(0)
+                except Exception:
+                    pass
+ 
+            robot.set_led(LED.GREEN, 255)
+            robot.set_led(LED.ORANGE, 0)
+            state = "MOVING"
+            print("[FSM] → MOVING (resumed)")
         # ══════════════════════════════════════════════════════════════════════
         # PAUSED  — red light mid-route
         # ══════════════════════════════════════════════════════════════════════
