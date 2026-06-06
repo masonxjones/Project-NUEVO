@@ -52,7 +52,7 @@ STEPPER_SWING           = 2
 # ── Elevator positions (steps — MORE steps = LOWER) ──────────────────────
 ELEVATOR_HOME           = 0       # fully raised; safe to drive and swing
 ELEVATOR_PICK_STEPS     = 4600    # ← TUNE: depth to grip any single piece
-ELEVATOR_PLACE_BUN      = 3000    # ← TUNE: depth to drop bun onto patty
+ELEVATOR_PLACE_BUN      = 2900    # ← TUNE: depth to drop bun onto patty
 ELEVATOR_PLACE_STACK    = 2000    # ← TUNE: depth to drop bun+patty onto bottom bun
 
 # ── Swing positions ───────────────────────────────────────────────────────
@@ -364,13 +364,15 @@ class BurgerAssemblyMixin:
 
         self.arm_swing_to(SWING_PICK_STEPS)           # swing out ONCE at the start
         self.arm_open_gripper()                        # open over piece
-        time.sleep(0.5)
+        time.sleep(4)
         self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
+        time.sleep(7)
         self.arm_grip()                                # grip bun
-        time.sleep(1)
+        time.sleep(3)
         self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0 — swing stays out
+        time.sleep(2)
         self._arm_log("Top bun picked ✓")
-        time.sleep(1)
+        time.sleep(2)
 
 # ── STEP 2: Drive to patty, drop bun, pick bun + patty ───────────────
         self._arm_log("── Step 2/4: Drive to patty → drop bun → pick bun+patty ──")
@@ -378,13 +380,14 @@ class BurgerAssemblyMixin:
         self._drive_forward(PIECE_SPACING_MM)         # elevator=0, swing still at -420
 
         # no arm_swing_to here — arm is already over the table
-        self.arm_elevator_to(ELEVATOR_PLACE_BUN)      # lower to 3000
-        time.sleep(0.3)
+        self.arm_elevator_to(ELEVATOR_PLACE_BUN)      # lower to 3200
+        time.sleep(4)
         self.arm_open_gripper()                        # drop bun onto patty
-        time.sleep(0.5)
+        time.sleep(4)
         self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
+        time.sleep(3)
         self.arm_grip()                                # grip bun + patty
-        time.sleep(0.5)
+        time.sleep(2)
         self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0 — swing stays out
         self._arm_log("Bun + patty picked ✓")
         time.sleep(1)
@@ -395,12 +398,16 @@ class BurgerAssemblyMixin:
         self._drive_forward(PIECE_SPACING_MM)         # elevator=0, swing still at -420
 
         # no arm_swing_to here — arm is already over the table
-        self.arm_elevator_to(ELEVATOR_PLACE_STACK)    # lower to 2000
+        self.arm_elevator_to(ELEVATOR_PLACE_STACK)    # lower to 2400
+        time.sleep(3)
         self.arm_open_gripper()                        # drop bun+patty onto bottom bun
-        time.sleep(0.3)
+        time.sleep(3)
         self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
+        time.sleep(3)
         self.arm_grip()                                # grip full stack
+        time.sleep(1)
         self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0
+        time.sleep(5)
 
 # ── STEP 4: Swing home ONCE, then depart ─────────────────────────────
         self._arm_log("── Step 4/4: Swing home → depart table → re-join path ──")
