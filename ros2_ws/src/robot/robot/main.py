@@ -27,7 +27,7 @@ RIGHT_WHEEL_MOTOR        = Motor.DC_M2
 RIGHT_WHEEL_DIR_INVERTED = True
 
 # ── Swing scan 
-TRAFFIC_LIGHT_SWING_STEPS = 100  # ← TUNE: steps to swing arm toward traffic light
+TRAFFIC_LIGHT_SWING_STEPS = -150  # ← TUNE: steps to swing arm toward traffic light
 ELEVATOR_HOME = 0
 
 # ---------------------------------------------------------------------------
