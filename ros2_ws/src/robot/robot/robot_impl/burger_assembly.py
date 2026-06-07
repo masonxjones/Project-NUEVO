@@ -384,7 +384,7 @@ class BurgerAssemblyMixin:
         self.arm_elevator_to(ELEVATOR_PLACE_BUN)      # lower to 3200
         time.sleep(4)
         self.arm_open_gripper()                        # drop bun onto patty
-        time.sleep(4)
+        time.sleep(2)
         self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
         time.sleep(3)
         self.arm_grip()                                # grip bun + patty
@@ -414,7 +414,6 @@ class BurgerAssemblyMixin:
         self._arm_log("── Step 4/4: Swing home → depart table → re-join path ──")
 
         self._arm_swing_home()                         # swing back to 0 — only time it returns
-        self._depart_table()
 
         self._arm_log("═══ Burger assembly COMPLETE ✓ ═══")
         self._arm_log("Full burger stack in gripper — path planner may resume.")
