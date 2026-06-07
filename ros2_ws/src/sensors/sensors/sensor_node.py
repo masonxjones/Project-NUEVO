@@ -27,9 +27,10 @@ class LidarSubscriber(Node):
         angles = angles[valid]
         ranges = ranges[valid]
 
-        # Convert to Cartesian
-        x = ranges * np.cos(angles)
-        y = ranges * np.sin(angles)
+        # Convert to Cartesian assuming forward is plotted along +y.
+        # Make the scan’s right side appear on positive x and flip y upward.
+        x = ranges * np.sin(angles)
+        y = -ranges * np.cos(angles)
 
         self.ax.clear()
         self.ax.scatter(x, y, s=5)

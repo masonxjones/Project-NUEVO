@@ -54,6 +54,7 @@ ELEVATOR_HOME           = 0       # fully raised; safe to drive and swing
 ELEVATOR_PICK_STEPS     = 4600    # ← TUNE: depth to grip any single piece
 ELEVATOR_PLACE_BUN      = 2900    # ← TUNE: depth to drop bun onto patty
 ELEVATOR_PLACE_STACK    = 2000    # ← TUNE: depth to drop bun+patty onto bottom bun
+ELEVATOR_RESTING        = 3800    # ← TUNE: depth to rest burger for driving
 
 # ── Swing positions ───────────────────────────────────────────────────────
 SWING_HOME              = 0       # parked — arm clear of lidar, MUST be 0
@@ -406,7 +407,7 @@ class BurgerAssemblyMixin:
         time.sleep(5)
         self.arm_grip()                                # grip full stack
         time.sleep(3)
-        self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0
+        self.arm_elevator_to(ELEVATOR_RESTING)            # raise to 0
         time.sleep(5)
 
 # ── STEP 4: Swing home ONCE, then depart ─────────────────────────────
