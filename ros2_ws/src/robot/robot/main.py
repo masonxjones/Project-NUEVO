@@ -29,6 +29,7 @@ RIGHT_WHEEL_DIR_INVERTED = True
 # ── Swing scan 
 TRAFFIC_LIGHT_SWING_STEPS = -150  # ← TUNE: steps to swing arm toward traffic light
 ELEVATOR_HOME = 0
+SWING_HOME    = 0
 
 # ---------------------------------------------------------------------------
 # Pure Pursuit + Obstacle Avoidance parameters
@@ -57,8 +58,9 @@ RAW_WAYPOINTS = [
     (0.0,    0.0),
     (0.0,    3560.0),
     (410.0,  3560.0),
-    (410.0,  810.0),
-    (1325.0, 810.0),
+    (410.0,  410.0),
+    (1325.0, 410.0),
+    (1325.0, 610.0),
     (1325.0, 3460.0),
     (2240.0, 3460.0),
     (2240.0, 0.0),
@@ -209,7 +211,7 @@ def run(robot: Robot) -> None:
                     assembly_done
                     and not delivery_done
                     and current_y <= DELIVERY_TRIGGER_Y_MM
-                    and abs(current_x) >= DELIVERY_TRIGGER_X_MAX
+                    and abs(current_x) >= DELIVERY_TRIGGER_X_MIN
                 ):
                     print(
                         f"[FSM] Delivery trigger at "
