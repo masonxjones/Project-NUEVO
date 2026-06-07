@@ -256,8 +256,8 @@ def run(robot: Robot) -> None:
     remaining_path: list               = []
 
     # Assembly / delivery flags — set True to skip burger assembly during testing
-    assembly_done  = True
-    delivery_done  = True
+    assembly_done  = False
+    delivery_done  = False
 
     # Checkpoint flag — prevents re-triggering as robot passes scan zone
     checkpoint_done = False
@@ -323,6 +323,44 @@ def run(robot: Robot) -> None:
         elif state == "MOVING":
             show_moving_leds(robot)
 
+            current_x, current_y, current_theta_deg = robot.get_pose()
+            current_theta_rad = math.radians(current_theta_deg)
+
+          # ── Assembly trigger ─────────────────────────────────────────────
+            if (
+               not assembly_done
+               and current_y >= ASSEMBLY_TRIGGER_Y_MM
+               and abs(current_x) <= ASSEMBLY_TRIGGER_X_MAX
+            ):
+               print(f"[FSM] Assembly trigger at ({current_x:.0f}, {current_y:.0f}) → ASSEMBLY")
+               robot.stop()
+               state = "ASSEMBLY"
+
+            else:
+                remaining_path = robot._advance_remaining_path(
+                  remaining_path, current_x, current_y,
+                  advance_radius_mm=LOOKAHEAD_DIST,
+                )
+
+                if len(remaining_path) <= 1:
+                 print("[NAV] Reached corridor entry. Switching to avoidance planner.")
+                 robot.stop()
+                 init_avoidance_planner(robot)
+                 print("[FSM] MOVING → MOVING_AVOID")
+                 state = "MOVING_AVOID"
+                else:
+                  linear_vel, angular_vel_rad = planner.compute_velocity(
+                  pose=(current_x, current_y, current_theta_rad),
+                  waypoints=remaining_path,
+                  max_linear=MAX_LINEAR_VEL,
+            )
+            robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
+        
+        
+        
+        elif state == "MOVING":
+            show_moving_leds(robot)
+
             current_x, current_y, _ = robot.get_pose()
 
             # ── Assembly trigger ─────────────────────────────────────────────
@@ -336,9 +374,9 @@ def run(robot: Robot) -> None:
                 state = "ASSEMBLY"
 
             else:
-                remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
+                # remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
 
-                if goal_reached:
+               # if goal_reached:
                     print("[NAV] Reached corridor entry (1325, 610). Switching to avoidance planner.")
                     robot.stop()
                     init_avoidance_planner(robot)
@@ -468,7 +506,13 @@ def run(robot: Robot) -> None:
         # ====================================================================
         elif state == "DELIVERY_MOVING":
             show_moving_leds(robot)
+            current_x, current_y, current_theta_deg = robot.get_pose()
+            current_theta_rad = math.radians(current_theta_deg)
 
+            remaining_path = robot._advance_remaining_path(
+              remaining_path, current_x, current_y,
+              advance_radius_mm=LOOKAHEAD_DIST,
+            )
             if len(remaining_path) == 0:
                 print("[WARN] DELIVERY_MOVING: empty path — forcing FINAL_MOVING")
                 robot.stop()
@@ -480,20 +524,17 @@ def run(robot: Robot) -> None:
                 stop_sign_detected = False
                 state = "FINAL_MOVING"
             else:
-                remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
+                linear_vel, angular_vel_rad = planner.compute_velocity(
+                 pose=(current_x, current_y, current_theta_rad),
+                 waypoints=remaining_path,
+                 max_linear=MAX_LINEAR_VEL,
+                )
+                robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
+
 
                 if goal_reached:
                     print("[NAV] Delivery drop-off complete. Routing home (2240, 0).")
-                    robot.stop()
 
-                    current_x, current_y, _ = robot.get_pose()
-                    planner        = make_planner()
-                    remaining_path = densify_polyline(
-                        [(current_x, current_y), (2240.0, 0.0)], spacing=20.0
-                    )
-
-                    stop_sign_detected = False
-                    state = "FINAL_MOVING"
 
         # ====================================================================
         # FINAL_MOVING  — drop-off → home (2240, 0), with stop-sign check
@@ -511,7 +552,7 @@ def run(robot: Robot) -> None:
                         stop_sign_detected   = True
                         stop_sign_start_time = time.monotonic()
                     else:
-                        remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
+                        # remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
                         if goal_reached:
                             print("[NAV] Reached home without stop sign.")
                             state = "FINISHED"
@@ -527,7 +568,7 @@ def run(robot: Robot) -> None:
 
             else:
                 show_moving_leds(robot)
-                remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
+                # remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
                 if goal_reached:
                     print("[NAV] Arrived home (2240, 0). Task complete!")
                     robot.stop()

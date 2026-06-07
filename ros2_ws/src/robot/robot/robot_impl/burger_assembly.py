@@ -384,7 +384,7 @@ class BurgerAssemblyMixin:
 
         # no arm_swing_to here — arm is already over the table
         self.arm_elevator_to(ELEVATOR_PLACE_STACK)    # lower to 2400
-        time.sleep(4)
+        time.sleep(3)
         self.arm_open_gripper()                        # drop bun+patty onto bottom bun
         time.sleep(3)
         self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
