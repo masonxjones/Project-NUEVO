@@ -265,7 +265,7 @@ class BurgerAssemblyMixin:
         except Exception as e:
             self._arm_warn(f"Turn error: {e}")
 
-    # ── Parallel-park approach / depart ──────────────────────────────────────
+    # ── Parallel-park approach /  ──────────────────────────────────────
 
     def _approach_table(self) -> None:
         """
@@ -283,22 +283,6 @@ class BurgerAssemblyMixin:
         self._point_turn(+APPROACH_TURN_DEG)     # ← TUNE APPROACH_TURN_DEG
         self._drive_forward(APPROACH_STRAFE_MM)  # ← TUNE APPROACH_STRAFE_MM
         self._point_turn(-APPROACH_TURN_DEG)     # mirrors the first turn
-
-    def _depart_table(self) -> None:
-        """
-        Reverse the parallel-park to re-join the forward path.
-
-        Motion:
-          1. Rotate LEFT  by APPROACH_TURN_DEG   (point away from table)
-          2. Drive backward APPROACH_STRAFE_MM   (back to original path line)
-          3. Rotate RIGHT by APPROACH_TURN_DEG   (face forward again)
-
-        After this the robot is back on the path line, facing forward.
-        """
-        self._arm_log("── Depart: parallel-park back to path ──")
-        self._point_turn(+APPROACH_TURN_DEG)      # point away from table
-        self._drive_backward(APPROACH_STRAFE_MM)  # back to path line
-        self._point_turn(-APPROACH_TURN_DEG)      # face forward
 
     # ── Homing ────────────────────────────────────────────────────────────────
 
