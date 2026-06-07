@@ -48,9 +48,7 @@ AVOID_DELAY         = 150
 AVOID_ALPHA_LD      = 0.7
 AVOID_OFFSET        = 270.0
 AVOID_LANE_WIDTH    = 500.0
-AVOID_X_L           = 1325.0   # must match the corridor x-coordinate so lane
-                                # filtering and obstacle side-detection are
-                                # relative to the actual path, not x=0
+AVOID_X_L           = 1325.0
 
 # ---------------------------------------------------------------------------
 # Arm / assembly constants
@@ -82,17 +80,16 @@ DELIVERY_LOCATIONS = {
 }
 
 # ---------------------------------------------------------------------------
-# Course waypoints — split at the corridor entry point
+# Course waypoints
 # ---------------------------------------------------------------------------
 
-# LEG1A ends at corridor entry — avoidance planner takes over from there
 LEG1A_WAYPOINTS = [
     (0.0,    0.0),
     (0.0,    3560.0),
     (410.0,  3560.0),
     (410.0,  610.0),
     (1325.0, 590.0),
-    (1325.0, 610.0),   # ← hand-off point: switch to avoidance planner here
+    (1325.0, 610.0),
 ]
 
 
@@ -150,7 +147,6 @@ def detect_stop_sign(robot: Robot) -> bool:
 
 
 def make_planner() -> PurePursuitPlanner:
-    """Create a fresh plain PurePursuitPlanner."""
     return PurePursuitPlanner(
         lookahead_dist=LOOKAHEAD_DIST,
         max_angular=MAX_ANGULAR_VEL,
@@ -158,10 +154,10 @@ def make_planner() -> PurePursuitPlanner:
     )
 
 
-def drive_step(robot: Robot, planner: PurePursuitPlanner, remaining_path: list) -> tuple[list, bool]:
+def pp_step(robot: Robot, planner: PurePursuitPlanner, remaining_path: list) -> tuple[list, bool]:
     """
-    One Pure Pursuit tick — confirmed working low-level API.
-    Returns (updated_remaining_path, goal_reached).
+    One inline Pure Pursuit tick. No drive_step — just the three calls
+    that were confirmed working. Returns (updated_path, goal_reached).
     """
     current_x, current_y, current_theta_deg = robot.get_pose()
     current_theta_rad = math.radians(current_theta_deg)
@@ -175,38 +171,16 @@ def drive_step(robot: Robot, planner: PurePursuitPlanner, remaining_path: list) 
         robot.stop()
         return remaining_path, True
 
-    pursuit_x, pursuit_y = planner._lookahead_point(
-        current_x, current_y, waypoints=remaining_path
-    )
-
     linear_vel, angular_vel_rad = planner.compute_velocity(
         pose=(current_x, current_y, current_theta_rad),
         waypoints=remaining_path,
         max_linear=MAX_LINEAR_VEL,
     )
-
     robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
-
-    goal_reached = planner.CurrentTargetReached(
-        pursuit_x, pursuit_y, current_x, current_y
-    )
-
-    return remaining_path, goal_reached
+    return remaining_path, False
 
 
 def init_avoidance_planner(robot: Robot) -> None:
-    """
-    Set up PurePursuitPlannerWithAvoidance for the cone corridor.
-
-    Two critical fixes vs the naive setup:
-    1. x_L=AVOID_X_L (1325) — tells the planner the path runs along x=1325.
-       Without this, obstacle side-detection and lane-width filtering are
-       relative to x=0, so the planner sees every cone as being on the wrong
-       side and steers into the wall.
-    2. Force current_lane='Center' after construction — the planner hardcodes
-       'Left' in __init__, which immediately shifts all waypoints by -offset
-       (~1055mm) before any obstacle is detected, sending the robot sideways.
-    """
     robot._nav_follow_pp_path(
         lookahead_distance=AVOID_LOOKAHEAD,
         max_linear_speed=AVOID_MAX_LINEAR,
@@ -222,12 +196,8 @@ def init_avoidance_planner(robot: Robot) -> None:
         obstacle_avoidance=True,
         x_L=AVOID_X_L,
     )
-
-    # Override the hardcoded 'Left' default so set_path loads the center lane
     robot.planner.current_lane = 'Center'
 
-    # Start 200mm north of the entry point so no waypoint is immediately
-    # behind the robot when the avoidance planner takes over
     leg1b = [
         (1325.0,  810.0),
         (1325.0, 3460.0),
@@ -251,18 +221,13 @@ def run(robot: Robot) -> None:
 
     next_tick = time.monotonic()
 
-    # Plain planner + path for non-avoidance legs
     planner:        PurePursuitPlanner = None
     remaining_path: list               = []
 
-    # Assembly / delivery flags — set True to skip burger assembly during testing
     assembly_done  = False
     delivery_done  = False
-
-    # Checkpoint flag — prevents re-triggering as robot passes scan zone
     checkpoint_done = False
 
-    # State-specific trackers
     checkpoint_stop_start = 0.0
     stop_sign_start_time  = 0.0
     stop_sign_detected    = False
@@ -272,7 +237,7 @@ def run(robot: Robot) -> None:
 
     while True:
 
-        # ── Global red-light pause (only while actively driving) ────────────
+        # ── Global red-light pause ──────────────────────────────────────────
         if state in ("MOVING", "MOVING_AVOID", "DELIVERY_MOVING", "FINAL_MOVING"):
             if not stop_sign_detected:
                 if get_traffic_light(robot) == "red":
@@ -290,7 +255,7 @@ def run(robot: Robot) -> None:
             break
 
         # ====================================================================
-        # IDLE  — wait for green, arm swing toward light, then launch
+        # IDLE
         # ====================================================================
         if state == "IDLE":
             robot.stop()
@@ -305,7 +270,6 @@ def run(robot: Robot) -> None:
 
             if get_traffic_light(robot) == "green":
                 print("[VISION] Green detected — arming planner.")
-
                 try:
                     robot.arm_swing_to(SWING_HOME)
                 except Exception as e:
@@ -313,12 +277,11 @@ def run(robot: Robot) -> None:
 
                 planner        = make_planner()
                 remaining_path = densify_polyline(LEG1A_WAYPOINTS, spacing=20.0)
-
-                print("[FSM] IDLE → MOVING (LEG1A: plain Pure Pursuit to corridor entry)")
+                print("[FSM] IDLE → MOVING")
                 state = "MOVING"
 
         # ====================================================================
-        # MOVING  — LEG1A: start → corridor entry (1325, 610), plain PP
+        # MOVING  — plain Pure Pursuit, no drive_step
         # ====================================================================
         elif state == "MOVING":
             show_moving_leds(robot)
@@ -326,44 +289,7 @@ def run(robot: Robot) -> None:
             current_x, current_y, current_theta_deg = robot.get_pose()
             current_theta_rad = math.radians(current_theta_deg)
 
-          # ── Assembly trigger ─────────────────────────────────────────────
-            if (
-               not assembly_done
-               and current_y >= ASSEMBLY_TRIGGER_Y_MM
-               and abs(current_x) <= ASSEMBLY_TRIGGER_X_MAX
-            ):
-               print(f"[FSM] Assembly trigger at ({current_x:.0f}, {current_y:.0f}) → ASSEMBLY")
-               robot.stop()
-               state = "ASSEMBLY"
-
-            else:
-                remaining_path = robot._advance_remaining_path(
-                  remaining_path, current_x, current_y,
-                  advance_radius_mm=LOOKAHEAD_DIST,
-                )
-
-                if len(remaining_path) <= 1:
-                 print("[NAV] Reached corridor entry. Switching to avoidance planner.")
-                 robot.stop()
-                 init_avoidance_planner(robot)
-                 print("[FSM] MOVING → MOVING_AVOID")
-                 state = "MOVING_AVOID"
-                else:
-                  linear_vel, angular_vel_rad = planner.compute_velocity(
-                  pose=(current_x, current_y, current_theta_rad),
-                  waypoints=remaining_path,
-                  max_linear=MAX_LINEAR_VEL,
-            )
-            robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
-        
-        
-        
-        elif state == "MOVING":
-            show_moving_leds(robot)
-
-            current_x, current_y, _ = robot.get_pose()
-
-            # ── Assembly trigger ─────────────────────────────────────────────
+            # Assembly trigger
             if (
                 not assembly_done
                 and current_y >= ASSEMBLY_TRIGGER_Y_MM
@@ -374,19 +300,27 @@ def run(robot: Robot) -> None:
                 state = "ASSEMBLY"
 
             else:
-                # remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
+                remaining_path = robot._advance_remaining_path(
+                    remaining_path, current_x, current_y,
+                    advance_radius_mm=LOOKAHEAD_DIST,
+                )
 
-               # if goal_reached:
-                    print("[NAV] Reached corridor entry (1325, 610). Switching to avoidance planner.")
+                if len(remaining_path) <= 1:
+                    print("[NAV] Reached corridor entry — switching to avoidance planner.")
                     robot.stop()
                     init_avoidance_planner(robot)
-                    print("[LIDAR] Obstacle avoidance INITIATED")
-                    print("[FSM] MOVING → MOVING_AVOID (LEG1B: corridor with cones)")
+                    print("[FSM] MOVING → MOVING_AVOID")
                     state = "MOVING_AVOID"
+                else:
+                    linear_vel, angular_vel_rad = planner.compute_velocity(
+                        pose=(current_x, current_y, current_theta_rad),
+                        waypoints=remaining_path,
+                        max_linear=MAX_LINEAR_VEL,
+                    )
+                    robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
 
         # ====================================================================
-        # MOVING_AVOID  — LEG1B: corridor (1325,610) → (2000,3460)
-        #                 PurePursuitPlannerWithAvoidance via TA's loop API
+        # MOVING_AVOID  — corridor with cones
         # ====================================================================
         elif state == "MOVING_AVOID":
             show_moving_leds(robot)
@@ -394,14 +328,14 @@ def run(robot: Robot) -> None:
             nav_result = robot._nav_follow_pp_path_loop()
 
             if nav_result == "IDLE":
-                print("[LIDAR] Obstacle avoidance DISABLED — corridor complete.")
+                print("[LIDAR] Corridor complete.")
                 print("[NAV] Arrived at scanning station (2000, 3460).")
                 robot.stop()
                 checkpoint_stop_start = time.monotonic()
                 state = "CUSTOMER_CHECKPOINT"
 
         # ====================================================================
-        # ASSEMBLY  — burger pick and stack sequence
+        # ASSEMBLY
         # ====================================================================
         elif state == "ASSEMBLY":
             print("[FSM] Starting burger assembly...")
@@ -424,19 +358,20 @@ def run(robot: Robot) -> None:
                     robot.arm_open_gripper()
                 except Exception:
                     pass
-          # ── Trim path to only waypoints ahead of current position ──────────
-            current_x, current_y, _ = robot.get_pose()
-            remaining_path = robot._advance_remaining_path(
-               remaining_path, current_x, current_y,
-               advance_radius_mm=LOOKAHEAD_DIST,
-            )
+            print(f"[DEBUG] remaining_path length before trim: {len(remaining_path)}")
+            print(f"[DEBUG] first waypoint: {remaining_path[0] if remaining_path else 'EMPTY'}")
+    
 
+            current_x, current_y, _ = robot.get_pose()
+            remaining_path = [(wx, wy) for (wx, wy) in remaining_path if wy >= current_y - 50.0]
+            print(f"[DEBUG] remaining_path after Y-filter: {len(remaining_path)} points, first={remaining_path[0] if remaining_path else 'EMPTY'}")
+           
             show_moving_leds(robot)
             state = "MOVING"
-            print("[FSM] → MOVING (resumed)")
-     
+            print("[FSM] ASSEMBLY → MOVING")
+
         # ====================================================================
-        # DELIVERY  — burger delivery to customer
+        # DELIVERY
         # ====================================================================
         elif state == "DELIVERY":
             print(f"[FSM] Delivering to Customer {detected_customer}...")
@@ -456,18 +391,19 @@ def run(robot: Robot) -> None:
                     robot.arm_swing_to(0)
                 except Exception:
                     pass
+
             current_x, current_y, _ = robot.get_pose()
             remaining_path = robot._advance_remaining_path(
-               remaining_path, current_x, current_y,
-               advance_radius_mm=LOOKAHEAD_DIST,
+                remaining_path, current_x, current_y,
+                advance_radius_mm=LOOKAHEAD_DIST,
             )
-      
+
             show_moving_leds(robot)
             state = "MOVING"
-            print("[FSM] → MOVING (resumed)")
+            print("[FSM] DELIVERY → MOVING")
 
         # ====================================================================
-        # CUSTOMER_CHECKPOINT  — 3-second stationary face scan
+        # CUSTOMER_CHECKPOINT  — 3-second face scan
         # ====================================================================
         elif state == "CUSTOMER_CHECKPOINT":
             robot.stop()
@@ -479,7 +415,6 @@ def run(robot: Robot) -> None:
                     customer_attr = attributes["customer_id"]
                     customer_id   = customer_attr.get("value")
                     confidence    = float(customer_attr.get("score", 0.0))
-
                     if customer_id in ("A", "B") and confidence >= PRODUCTION_THRESHOLD:
                         if confidence > highest_match_score:
                             highest_match_score = confidence
@@ -487,7 +422,6 @@ def run(robot: Robot) -> None:
 
             if time.monotonic() - checkpoint_stop_start >= 3.0:
                 print(f"[DECISION] Target: Customer {detected_customer.upper()}")
-
                 target_x, target_y = DELIVERY_LOCATIONS[detected_customer]
                 print(f"[NAV] Routing via (2240, 3460) → ({target_x}, {target_y})")
 
@@ -497,7 +431,6 @@ def run(robot: Robot) -> None:
                     [(current_x, current_y), (2240.0, 3460.0), (target_x, target_y)],
                     spacing=20.0,
                 )
-
                 checkpoint_done = True
                 state = "DELIVERY_MOVING"
 
@@ -506,15 +439,17 @@ def run(robot: Robot) -> None:
         # ====================================================================
         elif state == "DELIVERY_MOVING":
             show_moving_leds(robot)
+
             current_x, current_y, current_theta_deg = robot.get_pose()
             current_theta_rad = math.radians(current_theta_deg)
 
             remaining_path = robot._advance_remaining_path(
-              remaining_path, current_x, current_y,
-              advance_radius_mm=LOOKAHEAD_DIST,
+                remaining_path, current_x, current_y,
+                advance_radius_mm=LOOKAHEAD_DIST,
             )
-            if len(remaining_path) == 0:
-                print("[WARN] DELIVERY_MOVING: empty path — forcing FINAL_MOVING")
+
+            if len(remaining_path) <= 1:
+                print("[NAV] Delivery drop-off complete. Routing home (2240, 0).")
                 robot.stop()
                 current_x, current_y, _ = robot.get_pose()
                 planner        = make_planner()
@@ -525,16 +460,11 @@ def run(robot: Robot) -> None:
                 state = "FINAL_MOVING"
             else:
                 linear_vel, angular_vel_rad = planner.compute_velocity(
-                 pose=(current_x, current_y, current_theta_rad),
-                 waypoints=remaining_path,
-                 max_linear=MAX_LINEAR_VEL,
+                    pose=(current_x, current_y, current_theta_rad),
+                    waypoints=remaining_path,
+                    max_linear=MAX_LINEAR_VEL,
                 )
                 robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
-
-
-                if goal_reached:
-                    print("[NAV] Delivery drop-off complete. Routing home (2240, 0).")
-
 
         # ====================================================================
         # FINAL_MOVING  — drop-off → home (2240, 0), with stop-sign check
@@ -552,15 +482,29 @@ def run(robot: Robot) -> None:
                         stop_sign_detected   = True
                         stop_sign_start_time = time.monotonic()
                     else:
-                        # remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
-                        if goal_reached:
+                        current_x, current_y, current_theta_deg = robot.get_pose()
+                        current_theta_rad = math.radians(current_theta_deg)
+
+                        remaining_path = robot._advance_remaining_path(
+                            remaining_path, current_x, current_y,
+                            advance_radius_mm=LOOKAHEAD_DIST,
+                        )
+
+                        if len(remaining_path) <= 1:
                             print("[NAV] Reached home without stop sign.")
+                            robot.stop()
                             state = "FINISHED"
+                        else:
+                            linear_vel, angular_vel_rad = planner.compute_velocity(
+                                pose=(current_x, current_y, current_theta_rad),
+                                waypoints=remaining_path,
+                                max_linear=MAX_LINEAR_VEL,
+                            )
+                            robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
 
                 else:
                     robot.stop()
                     show_idle_leds(robot)
-
                     if time.monotonic() - stop_sign_start_time >= 3.0:
                         print("[VISION] 3s pause done — resuming.")
                         stop_sign_completed = True
@@ -568,11 +512,26 @@ def run(robot: Robot) -> None:
 
             else:
                 show_moving_leds(robot)
-                # remaining_path, goal_reached = drive_step(robot, planner, remaining_path)
-                if goal_reached:
+
+                current_x, current_y, current_theta_deg = robot.get_pose()
+                current_theta_rad = math.radians(current_theta_deg)
+
+                remaining_path = robot._advance_remaining_path(
+                    remaining_path, current_x, current_y,
+                    advance_radius_mm=LOOKAHEAD_DIST,
+                )
+
+                if len(remaining_path) <= 1:
                     print("[NAV] Arrived home (2240, 0). Task complete!")
                     robot.stop()
                     state = "FINISHED"
+                else:
+                    linear_vel, angular_vel_rad = planner.compute_velocity(
+                        pose=(current_x, current_y, current_theta_rad),
+                        waypoints=remaining_path,
+                        max_linear=MAX_LINEAR_VEL,
+                    )
+                    robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
 
         # ====================================================================
         # FINISHED
