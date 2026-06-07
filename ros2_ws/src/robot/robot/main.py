@@ -386,11 +386,17 @@ def run(robot: Robot) -> None:
                     robot.arm_open_gripper()
                 except Exception:
                     pass
+          # ── Trim path to only waypoints ahead of current position ──────────
+            current_x, current_y, _ = robot.get_pose()
+            remaining_path = robot._advance_remaining_path(
+               remaining_path, current_x, current_y,
+               advance_radius_mm=LOOKAHEAD_DIST,
+            )
 
             show_moving_leds(robot)
             state = "MOVING"
             print("[FSM] → MOVING (resumed)")
-
+     
         # ====================================================================
         # DELIVERY  — burger delivery to customer
         # ====================================================================
@@ -412,7 +418,12 @@ def run(robot: Robot) -> None:
                     robot.arm_swing_to(0)
                 except Exception:
                     pass
-
+            current_x, current_y, _ = robot.get_pose()
+            remaining_path = robot._advance_remaining_path(
+               remaining_path, current_x, current_y,
+               advance_radius_mm=LOOKAHEAD_DIST,
+            )
+      
             show_moving_leds(robot)
             state = "MOVING"
             print("[FSM] → MOVING (resumed)")
