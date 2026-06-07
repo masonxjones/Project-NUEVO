@@ -34,10 +34,10 @@ ELEVATOR_HOME = 0
 # Pure Pursuit + Obstacle Avoidance parameters
 # ---------------------------------------------------------------------------
 
-LOOKAHEAD_DIST  = 200.0          # increased — robot looks further ahead, smoother curves
-MAX_LINEAR_VEL  = 50.0          # keep the same
-MAX_ANGULAR_VEL = 0.8            # reduced — limits how sharply it can turn
-GOAL_TOLERANCE  = 20.0
+LOOKAHEAD_DIST  = 50.0          # increased — robot looks further ahead, smoother curves
+MAX_LINEAR_VEL  = 80.0          # keep the same
+MAX_ANGULAR_VEL = 0.6           # reduced — limits how sharply it can turn
+GOAL_TOLERANCE  = 20.0          # mm
 
 OBS_RANGE_MM    = 400.0          # increased — detects obstacles earlier giving more time to react
 VIEW_ANGLE_RAD  = math.radians(60.0)  # narrowed — only looks forward, ignores side clutter
