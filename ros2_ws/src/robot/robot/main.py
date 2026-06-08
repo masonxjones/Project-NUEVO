@@ -13,7 +13,7 @@ from robot.path_planner import PurePursuitPlanner
 # Robot build configuration
 # ---------------------------------------------------------------------------
 
-TAG_ID            = 11
+TAG_ID            = 26
 POSITION_UNIT     = Unit.MM
 WHEEL_DIAMETER    = 76.2
 WHEEL_BASE        = 241.3
@@ -49,23 +49,12 @@ AVOID_ALPHA_LD      = 0.7
 AVOID_OFFSET        = 270.0
 AVOID_LANE_WIDTH    = 500.0
 AVOID_X_L           = 1325.0
-# AVOID_LOOKAHEAD     = 100.0
-# AVOID_MAX_LINEAR    = 140.0
-# AVOID_MAX_ANGULAR   = 1.5
-# AVOID_GOAL_TOL      = 20.0
-# AVOID_OBS_RANGE     = 450.0
-# AVOID_VIEW_ANGLE    = math.radians(70.0)
-# AVOID_SAFE_DIST     = 250.0
-# AVOID_DELAY         = 150
-# AVOID_ALPHA_LD      = 0.7
-# AVOID_OFFSET        = 270.0
-# AVOID_LANE_WIDTH    = 500.0
-# AVOID_X_L           = 1325.0
+
 # ---------------------------------------------------------------------------
 # Arm / assembly constants
 # ---------------------------------------------------------------------------
 
-TRAFFIC_LIGHT_SWING_STEPS = -150
+TRAFFIC_LIGHT_SWING_STEPS = -100
 ELEVATOR_HOME = 0
 SWING_HOME    = 0
 ELEVATOR_LOW = 4800
@@ -226,6 +215,10 @@ def init_avoidance_planner(robot: Robot) -> None:
 def run(robot: Robot) -> None:
     configure_robot(robot)
     start_robot(robot)
+    
+    robot.set_pos_fusion_alpha(0.10)  # your tuned value
+   
+    
 
     state  = "IDLE"
     period = 1.0 / float(DEFAULT_FSM_HZ)
