@@ -326,24 +326,20 @@ class BurgerAssemblyMixin:
         if home_on_start:
             self.arm_home()
 
-        # ── Approach: move robot beside the table ────────────────────────────
-        # Swing MUST be at home before any driving
-        self._arm_swing_home()
-        self._approach_table()
 
         # ── STEP 1: Pick TOP BUN ─────────────────────────────────────────────
         self._arm_log("── Step 1/4: Pick TOP BUN ──")
 
         self.arm_swing_to(SWING_PICK_STEPS)           # swing out ONCE at the start
         self.arm_open_gripper()                        # open over piece
-        # time.sleep(2)
-        # self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
-        # time.sleep(6)
-        # self.arm_grip()                                # grip bun
-        # time.sleep(4)
-        # self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0 — swing stays out
-        # time.sleep(2)
-        # self._arm_log("Top bun picked ✓")
+        time.sleep(2)
+        self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
+        time.sleep(6)
+        self.arm_grip()                                # grip bun
+        time.sleep(4)
+        self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0 — swing stays out
+        time.sleep(2)
+        self._arm_log("Top bun picked ✓")
         time.sleep(3)
 
 # ── STEP 2: Drive to patty, drop bun, pick bun + patty ───────────────
@@ -352,17 +348,17 @@ class BurgerAssemblyMixin:
         self._drive_forward(PIECE_SPACING_MM)         # elevator=0, swing still at -420
 
         # no arm_swing_to here — arm is already over the table
-        # self.arm_elevator_to(ELEVATOR_PLACE_BUN)      # lower to 3200
-        # time.sleep(4)
-        # self.arm_open_gripper()                        # drop bun onto patty
-        # time.sleep(2)
-        # self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
-        # time.sleep(3)
-        # self.arm_grip()                                # grip bun + patty
-        # time.sleep(2)
-        # self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0 — swing stays out
-        # self._arm_log("Bun + patty picked ✓")
-        # time.sleep(5)
+        self.arm_elevator_to(ELEVATOR_PLACE_BUN)      # lower to 3200
+        time.sleep(4)
+        self.arm_open_gripper()                        # drop bun onto patty
+        time.sleep(2)
+        self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 4600
+        time.sleep(3)
+        self.arm_grip()                                # grip bun + patty
+        time.sleep(2)
+        self.arm_elevator_to(ELEVATOR_HOME)            # raise to 0 — swing stays out
+        self._arm_log("Bun + patty picked ✓")
+        time.sleep(5)
 
 # ── STEP 3: Drive to bottom bun, drop stack, pick full burger ─────────
         self._arm_log("── Step 3/4: Drive to bottom bun → drop stack → pick full stack ──")
@@ -370,16 +366,16 @@ class BurgerAssemblyMixin:
         self._drive_forward(PIECE_SPACING_MM)         # elevator=0, swing still at -420
 
         # no arm_swing_to here — arm is already over the table
-        # self.arm_elevator_to(ELEVATOR_PLACE_STACK)    # lower to 2400
-        # time.sleep(3)
-        # self.arm_open_gripper()                        # drop bun+patty onto bottom bun
-        # time.sleep(3)
-        # self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 5000
-        # time.sleep(5)
-        # self.arm_grip()                                # grip full stack
-        # time.sleep(3)
-        # self.arm_elevator_to(ELEVATOR_RESTING)            # raise to 0
-        # time.sleep(5)
+        self.arm_elevator_to(ELEVATOR_PLACE_STACK)    # lower to 2400
+        time.sleep(3)
+        self.arm_open_gripper()                        # drop bun+patty onto bottom bun
+        time.sleep(3)
+        self.arm_elevator_to(ELEVATOR_PICK_STEPS)     # lower to 5000
+        time.sleep(5)
+        self.arm_grip()                                # grip full stack
+        time.sleep(3)
+        self.arm_elevator_to(ELEVATOR_RESTING)            # raise to 0
+        time.sleep(5)
 
 # ── STEP 4: Swing home ONCE, then depart ─────────────────────────────
         self._arm_log("── Step 4/4: Swing home → depart table → re-join path ──")

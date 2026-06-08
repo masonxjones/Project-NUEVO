@@ -37,19 +37,30 @@ GOAL_TOLERANCE  = 20.0    # mm
 # PurePursuitPlannerWithAvoidance parameters (corridor leg)
 # ---------------------------------------------------------------------------
 
-AVOID_LOOKAHEAD     = 100.0
+AVOID_LOOKAHEAD     = 180.0
 AVOID_MAX_LINEAR    = 140.0
 AVOID_MAX_ANGULAR   = 1.5
 AVOID_GOAL_TOL      = 20.0
-AVOID_OBS_RANGE     = 450.0
-AVOID_VIEW_ANGLE    = math.radians(70.0)
-AVOID_SAFE_DIST     = 250.0
-AVOID_DELAY         = 150
+AVOID_OBS_RANGE     = 300.0 # the "look-for-trouble" radius
+AVOID_VIEW_ANGLE    = math.radians(70.0) # how much we allow the lidar to see
+AVOID_SAFE_DIST     = 200.0 # the "panic" distance
+AVOID_DELAY         = 150 # "cool down timer" in ms
 AVOID_ALPHA_LD      = 0.7
 AVOID_OFFSET        = 270.0
 AVOID_LANE_WIDTH    = 500.0
 AVOID_X_L           = 1325.0
-
+# AVOID_LOOKAHEAD     = 100.0
+# AVOID_MAX_LINEAR    = 140.0
+# AVOID_MAX_ANGULAR   = 1.5
+# AVOID_GOAL_TOL      = 20.0
+# AVOID_OBS_RANGE     = 450.0
+# AVOID_VIEW_ANGLE    = math.radians(70.0)
+# AVOID_SAFE_DIST     = 250.0
+# AVOID_DELAY         = 150
+# AVOID_ALPHA_LD      = 0.7
+# AVOID_OFFSET        = 270.0
+# AVOID_LANE_WIDTH    = 500.0
+# AVOID_X_L           = 1325.0
 # ---------------------------------------------------------------------------
 # Arm / assembly constants
 # ---------------------------------------------------------------------------
@@ -57,6 +68,7 @@ AVOID_X_L           = 1325.0
 TRAFFIC_LIGHT_SWING_STEPS = -150
 ELEVATOR_HOME = 0
 SWING_HOME    = 0
+ELEVATOR_LOW = 4800
 
 # ---------------------------------------------------------------------------
 # Assembly + delivery spatial triggers
@@ -224,7 +236,7 @@ def run(robot: Robot) -> None:
     planner:        PurePursuitPlanner = None
     remaining_path: list               = []
 
-    assembly_done  = False
+    assembly_done  = True
     delivery_done  = False
     checkpoint_done = False
 
@@ -263,7 +275,7 @@ def run(robot: Robot) -> None:
             robot._draw_lidar_obstacles()
 
             try:
-                robot.arm_elevator_to(ELEVATOR_HOME)
+                robot.arm_elevator_to(ELEVATOR_LOW)
                 robot.arm_swing_to(TRAFFIC_LIGHT_SWING_STEPS)
             except Exception as e:
                 print(f"[WARN] Arm swing failed: {e}")
@@ -272,11 +284,13 @@ def run(robot: Robot) -> None:
                 print("[VISION] Green detected — arming planner.")
                 try:
                     robot.arm_swing_to(SWING_HOME)
+                    robot.arm_elevator_to(ELEVATOR_HOME)
                 except Exception as e:
                     print(f"[WARN] Arm return home failed: {e}")
 
                 planner        = make_planner()
                 remaining_path = densify_polyline(LEG1A_WAYPOINTS, spacing=20.0)
+                time.sleep(2)
                 print("[FSM] IDLE → MOVING")
                 state = "MOVING"
 

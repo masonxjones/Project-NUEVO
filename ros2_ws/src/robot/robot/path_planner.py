@@ -682,7 +682,7 @@ class PurePursuitPlannerWithAvoidance(PathPlanner):
                             self.current_lane = 'Left'
                     print('Change Lane!!! Current lane is:', self.current_lane)
                     if np.hypot(x-closest_pt[0], y-closest_pt[1]) < (self.safe_dist+self.obstacles_range)/2:
-                        print('Too Closed!!!')
+                        print('Too Close!!!')
                         if self.current_lane == 'Right':
                             self.remaining_path.insert(0, (x+self.offset, y+self.offset/2))
                             self.raw_path.insert(0, (x+self.offset, y+self.offset))
