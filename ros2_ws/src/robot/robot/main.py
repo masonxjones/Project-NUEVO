@@ -45,7 +45,7 @@ GOAL_TOLERANCE  = 20.0    # mm
 TRAFFIC_LIGHT_SWING_STEPS = -100
 ELEVATOR_HOME = 0
 SWING_HOME    = 0
-ELEVATOR_LOW  = 4800
+ELEVATOR_LOW  = 3200
 
 # ---------------------------------------------------------------------------
 # Assembly + delivery spatial triggers
@@ -216,7 +216,7 @@ def run(robot: Robot) -> None:
     planner:        PurePursuitPlanner = None
     remaining_path: list               = []
 
-    assembly_done       = True
+    assembly_done       = False
     delivery_done       = False
     checkpoint_done     = False
 
