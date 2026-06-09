@@ -72,7 +72,7 @@ DELIVERY_SWING_STEPS    = SWING_PICK_STEPS   # -420 — same side as assembly ta
                                               # ← TUNE if delivery side differs
 
 # ── Elevator depth to release burger ─────────────────────────────────────
-DELIVERY_DROP_STEPS     = ELEVATOR_PICK_STEPS  # 4600 ← TUNE: lower = deeper drop
+DELIVERY_DROP_STEPS     = 4600  # 4600 ← TUNE: lower = deeper drop
 
 # ── Drive speed during delivery approach ──────────────────────────────────
 DELIVERY_SPEED_MM_S     = 80.0    # ← TUNE: mm/s
