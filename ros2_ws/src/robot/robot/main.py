@@ -51,7 +51,7 @@ ELEVATOR_LOW  = 3200
 # Assembly + delivery spatial triggers
 # ---------------------------------------------------------------------------
 
-ASSEMBLY_TRIGGER_Y_MM  = 842.9
+ASSEMBLY_TRIGGER_Y_MM  = 800
 ASSEMBLY_TRIGGER_X_MAX = 50.0
 
 # ---------------------------------------------------------------------------
