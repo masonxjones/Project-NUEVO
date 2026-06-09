@@ -63,8 +63,8 @@ from robot.robot_impl.burger_assembly import (
 # ════════════════════════════════════════════════════════════════════════════
 
 # ── How far to drive forward to reach each customer's drop zone ───────────
-CUSTOMER_A_DRIVE_MM     = 2035.0   # ← TUNE: mm to drive forward for Customer A
-CUSTOMER_B_DRIVE_MM     = 1735.0   # ← TUNE: mm to drive forward for Customer B
+CUSTOMER_A_DRIVE_MM     = 1435.0   # ← TUNE: mm to drive forward for Customer A
+CUSTOMER_B_DRIVE_MM     = 1535.0   # ← TUNE: mm to drive forward for Customer B
 CUSTOMER_UNKNOWN_DRIVE_MM = 1900.0 # ← TUNE: fallback if customer not identified
 
 # ── Arm position for delivery (mirrors assembly) ──────────────────────────
