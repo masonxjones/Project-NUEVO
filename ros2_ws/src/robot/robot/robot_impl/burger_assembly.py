@@ -375,7 +375,7 @@ class BurgerAssemblyMixin:
         self.arm_grip()                                # grip full stack
         time.sleep(3)
         self.arm_elevator_to(ELEVATOR_RESTING)            # raise to 0
-        time.sleep(5)
+        time.sleep(6)
 
 # ── STEP 4: Swing home ONCE, then depart ─────────────────────────────
         self._arm_log("── Step 4/4: Swing home → depart table → re-join path ──")

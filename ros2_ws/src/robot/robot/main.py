@@ -73,10 +73,10 @@ DELIVERY_LOCATIONS = {
 # Leg 1A: start → corridor entry
 LEG1A_WAYPOINTS = [
     (0.0,    0.0),
-    (0.0,    3560.0),
-    (410.0,  3540.0),
-    (410.0,  610.0),
-    (1275.0, 620.0),
+    (0.0,    3360.0),
+    (410.0,  3340.0),
+    (410.0,  450.0),
+    (1275.0, 470.0),
     (1275.0, 610.0),
 ]
 
@@ -386,7 +386,7 @@ def run(robot: Robot) -> None:
             robot.set_led(LED.ORANGE, 200)
 
             try:
-                robot.deliver_burger(customer=detected_customer)
+                robot.deliver_burger(ASSEMBLY=True)
                 delivery_done = True
                 print("[FSM] Delivery complete — resuming path.")
             except Exception as e:
