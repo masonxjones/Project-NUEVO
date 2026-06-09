@@ -51,10 +51,10 @@ STEPPER_SWING           = 2
 
 # ── Elevator positions (steps — MORE steps = LOWER) ──────────────────────
 ELEVATOR_HOME           = 0       # fully raised; safe to drive and swing
-ELEVATOR_PICK_STEPS     = 5000    # ← TUNE: depth to grip any single piece
+ELEVATOR_PICK_STEPS     = 4600    # ← TUNE: depth to grip any single piece
 ELEVATOR_PLACE_BUN      = 3100    # ← TUNE: depth to drop bun onto patty
-ELEVATOR_PLACE_STACK    = 2400    # ← TUNE: depth to drop bun+patty onto bottom bun
-ELEVATOR_RESTING        = 4000    # ← TUNE: depth to rest burger for driving
+ELEVATOR_PLACE_STACK    = 2300    # ← TUNE: depth to drop bun+patty onto bottom bun
+ELEVATOR_RESTING        = 3200    # ← TUNE: depth to rest burger for driving
 
 # ── Swing positions ───────────────────────────────────────────────────────
 SWING_HOME              = 0       # parked — arm clear of lidar, MUST be 0
