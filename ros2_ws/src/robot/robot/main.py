@@ -15,7 +15,7 @@ from robot.path_planner import PurePursuitPlanner
 TAG_ID            = 11
 POSITION_UNIT     = Unit.MM
 WHEEL_DIAMETER    = 76.2
-WHEEL_BASE        = 241.3
+WHEEL_BASE        = 221.3
 INITIAL_THETA_DEG = 90.0
 
 LEFT_WHEEL_MOTOR         = Motor.DC_M1
@@ -44,7 +44,7 @@ SWING_HOME    = 0
 # Assembly spatial trigger
 # ---------------------------------------------------------------------------
 
-ASSEMBLY_TRIGGER_Y_MM  = 842.9
+ASSEMBLY_TRIGGER_Y_MM  = 870.9
 ASSEMBLY_TRIGGER_X_MAX = 50.0
 
 # ---------------------------------------------------------------------------
@@ -74,8 +74,8 @@ DELIVERY_LOCATIONS = {
 
 ALL_WAYPOINTS = [
     (0.0,    0.0),
-    (0,    3560.0),
-    (400.0,  3550.0),
+    (0,    3520.0),
+    (400.0,  3520.0),
     (400.0,  790.0),
     (1315.0, 790.0),
     (1320.0, 3530.0),
@@ -165,7 +165,7 @@ def run(robot: Robot) -> None:
     planner:        PurePursuitPlanner = None
     remaining_path: list               = []
 
-    assembly_done       = True
+    assembly_done       = False
     checkpoint_done     = False
     delivery_done       = False
     idle_arm_positioned = False

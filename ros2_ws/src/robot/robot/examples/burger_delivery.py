@@ -334,6 +334,7 @@ class BurgerDeliveryMixin:
         # ── Step 6: Raise elevator ────────────────────────────────────────────
         self._delivery_log("── Step 5/5: Raise elevator to home ──")
         self.arm_elevator_to(ELEVATOR_HOME)
+        time.sleep(2.0)
 
         # ── Step 7: Swing arm back to home ────────────────────────────────────
         self._delivery_log("Swing arm back to home (0)...")
