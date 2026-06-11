@@ -1,32 +1,21 @@
 from __future__ import annotations
-
-import math
 import time
+import math
+import numpy as np
 
-from robot.hardware_map import (
-    Button,
-    DEFAULT_FSM_HZ,
-    LED,
-    Motor,
-    LIDAR_FOV_DEG,
-    LIDAR_MOUNT_THETA_DEG,
-    LIDAR_MOUNT_X_MM,
-    LIDAR_MOUNT_Y_MM,
-    LIDAR_RANGE_MAX_MM,
-    LIDAR_RANGE_MIN_MM,
-)
-from robot.path_planner import LeashedAPFPlanner, PurePursuitPlanner
 from robot.robot import FirmwareState, Robot, Unit
+from robot.hardware_map import Button, DEFAULT_FSM_HZ, LED, Motor
 from robot.util import densify_polyline
+from robot.path_planner import PurePursuitPlanner
 
 # ---------------------------------------------------------------------------
 # Robot build configuration
 # ---------------------------------------------------------------------------
 
-TAG_ID            = 26
+TAG_ID            = 11
 POSITION_UNIT     = Unit.MM
 WHEEL_DIAMETER    = 76.2
-WHEEL_BASE        = 241.3
+WHEEL_BASE        = 251.3
 INITIAL_THETA_DEG = 90.0
 
 LEFT_WHEEL_MOTOR         = Motor.DC_M1
@@ -47,17 +36,25 @@ GOAL_TOLERANCE  = 20.0    # mm
 # Arm / assembly constants
 # ---------------------------------------------------------------------------
 
-TRAFFIC_LIGHT_SWING_STEPS = -100
+TRAFFIC_LIGHT_SWING_STEPS = -150
 ELEVATOR_HOME = 0
 SWING_HOME    = 0
-ELEVATOR_LOW  = 3200
 
 # ---------------------------------------------------------------------------
-# Assembly + delivery spatial triggers
+# Assembly spatial trigger
 # ---------------------------------------------------------------------------
 
-ASSEMBLY_TRIGGER_Y_MM  = 800
+ASSEMBLY_TRIGGER_Y_MM  = 842.9
 ASSEMBLY_TRIGGER_X_MAX = 50.0
+
+# ---------------------------------------------------------------------------
+# Customer checkpoint trigger
+# ---------------------------------------------------------------------------
+
+CHECKPOINT_TRIGGER_X_MIN = 1275.0
+CHECKPOINT_TRIGGER_X_MAX = 1375.0
+CHECKPOINT_TRIGGER_Y_MIN = 3410.0
+CHECKPOINT_TRIGGER_Y_MAX = 3510.0
 
 # ---------------------------------------------------------------------------
 # Vision / delivery config
@@ -75,32 +72,16 @@ DELIVERY_LOCATIONS = {
 # Course waypoints
 # ---------------------------------------------------------------------------
 
-# Leg 1A: start → corridor entry
-LEG1A_WAYPOINTS = [
+ALL_WAYPOINTS = [
     (0.0,    0.0),
-    (0.0,    3360.0),
-    (410.0,  3340.0),
-    (410.0,  450.0),
-    (1275.0, 470.0),
-    (1275.0, 610.0),
+    (0.0,    3560.0),
+    (410.0,  3550.0),
+    (410.0,  810.0),
+    (1335.0, 810.0),
+    (1338.0, 3530.0),
+    (2260.0, 3530.0),
+    (2250.0, 0.0),
 ]
-
-# ---------------------------------------------------------------------------
-# Lidar / LAPF parameters
-# ---------------------------------------------------------------------------
-
-LAPF_GOAL_MM        = (1800.0, 3460.0)
-LAPF_VELOCITY_MM_S  = 140.0
-LAPF_TOLERANCE_MM   = 50.0
-LAPF_MAX_ANGULAR    = 1.5
-LAPF_LEASH_MM       = 400.0
-LAPF_REPULSION_MM   = 300.0
-LAPF_TARGET_SPEED   = 200.0
-LAPF_REPULSION_GAIN = 550.0
-LAPF_ATTRACTION_GAIN = 1.0
-LAPF_FORCE_EMA      = 0.35
-LAPF_INFLATION_MM   = 130.0
-LAPF_HALF_ANGLE_DEG = 25.0
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -119,19 +100,12 @@ def configure_robot(robot: Robot) -> None:
     )
     robot.set_tracked_tag_id(TAG_ID)
     robot.enable_vision()
-    robot.enable_lidar()
-    robot.set_lidar_mount(
-        x_mm=LIDAR_MOUNT_X_MM,
-        y_mm=LIDAR_MOUNT_Y_MM,
-        theta_deg=LIDAR_MOUNT_THETA_DEG,
-    )
-    robot.set_lidar_filter(
-        range_min_mm=LIDAR_RANGE_MIN_MM,
-        range_max_mm=LIDAR_RANGE_MAX_MM,
-        fov_deg=LIDAR_FOV_DEG,
-    )
-    robot.start_lidar_world_publisher()
-    print("[sensor] lidar ENABLED — LAPF corridor avoidance active")
+    # --- Lidar DISABLED ---
+    # robot.enable_lidar()
+    # robot.set_lidar_mount(...)
+    # robot.set_lidar_filter(...)
+    # robot.start_lidar_world_publisher()
+    print("[sensor] lidar DISABLED — pure pursuit only")
 
 
 def start_robot(robot: Robot) -> None:
@@ -152,7 +126,7 @@ def show_moving_leds(robot: Robot) -> None:
 
 def get_traffic_light(robot: Robot):
     for detection in robot.get_detections("traffic light"):
-        if float(detection.get("confidence", 0.0)) >= 0.40:
+        if float(detection.get("confidence", 0.0)) >= 0.50:
             color = detection.get("attributes", {}).get("color", {}).get("value")
             if color in ("red", "green"):
                 return color
@@ -161,7 +135,7 @@ def get_traffic_light(robot: Robot):
 
 def detect_stop_sign(robot: Robot) -> bool:
     for detection in robot.get_detections("stop sign"):
-        if float(detection.get("confidence", 0.0)) >= 0.40:
+        if float(detection.get("confidence", 0.0)) >= 0.50:
             return True
     return False
 
@@ -182,34 +156,19 @@ def run(robot: Robot) -> None:
     configure_robot(robot)
     start_robot(robot)
 
-    lapf_planner = LeashedAPFPlanner(
-        max_linear=LAPF_VELOCITY_MM_S,
-        max_angular=LAPF_MAX_ANGULAR,
-        target_speed=LAPF_TARGET_SPEED,
-        repulsion_gain=LAPF_REPULSION_GAIN,
-        repulsion_range=LAPF_REPULSION_MM,
-        attraction_gain=LAPF_ATTRACTION_GAIN,
-        force_ema_alpha=LAPF_FORCE_EMA,
-        leash_length_mm=LAPF_LEASH_MM,
-        leash_half_angle_deg=LAPF_HALF_ANGLE_DEG,
-        inflation_margin_mm=LAPF_INFLATION_MM,
-        goal_tolerance=LAPF_TOLERANCE_MM,
-    )
-
-    robot.set_pos_fusion_alpha(0.10)
-
     state  = "IDLE"
     period = 1.0 / float(DEFAULT_FSM_HZ)
-    print(f"[FSM] period={period:.3f}s — waiting for GREEN light")
+    print(f"[FSM] period: {period:.3f}s  — waiting for GREEN light")
 
     next_tick = time.monotonic()
 
     planner:        PurePursuitPlanner = None
     remaining_path: list               = []
 
-    assembly_done       = False
-    delivery_done       = False
+    assembly_done       = True
     checkpoint_done     = False
+    delivery_done       = False
+    idle_arm_positioned = False
 
     checkpoint_stop_start = 0.0
     stop_sign_start_time  = 0.0
@@ -221,7 +180,7 @@ def run(robot: Robot) -> None:
     while True:
 
         # ── Global red-light pause ──────────────────────────────────────────
-        if state in ("MOVING", "MOVING_AVOID", "DELIVERY_MOVING", "FINAL_MOVING"):
+        if state in ("MOVING", "DELIVERY_MOVING", "FINAL_MOVING"):
             if not stop_sign_detected:
                 if get_traffic_light(robot) == "red":
                     print("[TRAFFIC LIGHT] Red — holding.")
@@ -244,28 +203,29 @@ def run(robot: Robot) -> None:
             robot.stop()
             show_idle_leds(robot)
 
-            try:
-                robot.arm_elevator_to(ELEVATOR_LOW)
-                robot.arm_swing_to(TRAFFIC_LIGHT_SWING_STEPS)
-            except Exception as e:
-                print(f"[WARN] Arm swing failed: {e}")
+            if not idle_arm_positioned:
+                try:
+                    robot.arm_elevator_to(ELEVATOR_HOME)
+                    robot.arm_swing_to(TRAFFIC_LIGHT_SWING_STEPS)
+                    idle_arm_positioned = True
+                except Exception as e:
+                    print(f"[WARN] Arm swing failed: {e}")
 
             if get_traffic_light(robot) == "green":
+                idle_arm_positioned = False
                 print("[VISION] Green detected — arming planner.")
                 try:
                     robot.arm_swing_to(SWING_HOME)
-                    robot.arm_elevator_to(ELEVATOR_HOME)
                 except Exception as e:
                     print(f"[WARN] Arm return home failed: {e}")
 
                 planner        = make_planner()
-                remaining_path = densify_polyline(LEG1A_WAYPOINTS, spacing=20.0)
-                time.sleep(2)
+                remaining_path = densify_polyline(ALL_WAYPOINTS, spacing=20.0)
                 print("[FSM] IDLE → MOVING")
                 state = "MOVING"
 
         # ====================================================================
-        # MOVING — plain Pure Pursuit, Leg 1A
+        # MOVING — pure pursuit through all waypoints
         # ====================================================================
         elif state == "MOVING":
             show_moving_leds(robot)
@@ -283,6 +243,17 @@ def run(robot: Robot) -> None:
                 robot.stop()
                 state = "ASSEMBLY"
 
+            # Customer checkpoint trigger — robot is at (1325, 3460) facing north
+            elif (
+                not checkpoint_done
+                and CHECKPOINT_TRIGGER_X_MIN <= current_x <= CHECKPOINT_TRIGGER_X_MAX
+                and CHECKPOINT_TRIGGER_Y_MIN <= current_y <= CHECKPOINT_TRIGGER_Y_MAX
+            ):
+                print(f"[FSM] Checkpoint trigger at ({current_x:.0f}, {current_y:.0f}) → CUSTOMER_CHECKPOINT")
+                robot.stop()
+                checkpoint_stop_start = time.monotonic()
+                state = "CUSTOMER_CHECKPOINT"
+
             else:
                 remaining_path = robot._advance_remaining_path(
                     remaining_path, current_x, current_y,
@@ -290,10 +261,9 @@ def run(robot: Robot) -> None:
                 )
 
                 if len(remaining_path) <= 1:
-                    print("[NAV] Leg 1A complete — entering corridor (LAPF active).")
+                    print("[NAV] Path complete.")
                     robot.stop()
-                    lapf_planner.reset()
-                    state = "MOVING_AVOID"
+                    state = "FINISHED"
                 else:
                     linear_vel, angular_vel_rad = planner.compute_velocity(
                         pose=(current_x, current_y, current_theta_rad),
@@ -301,36 +271,6 @@ def run(robot: Robot) -> None:
                         max_linear=MAX_LINEAR_VEL,
                     )
                     robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
-
-        # ====================================================================
-        # MOVING_AVOID — corridor, LAPF with lidar
-        # ====================================================================
-        elif state == "MOVING_AVOID":
-            show_moving_leds(robot)
-
-            current_x, current_y, current_theta_deg = robot.get_pose()
-            current_theta_rad = math.radians(current_theta_deg)
-
-            dist_to_goal = math.hypot(
-                LAPF_GOAL_MM[0] - current_x,
-                LAPF_GOAL_MM[1] - current_y,
-            )
-
-            if dist_to_goal <= LAPF_TOLERANCE_MM:
-                print("[NAV] Corridor complete — arrived at scanning station.")
-                robot.stop()
-                lapf_planner.reset()
-                checkpoint_stop_start = time.monotonic()
-                state = "CUSTOMER_CHECKPOINT"
-            else:
-                obstacles = robot.get_obstacle_tracks()
-                linear_vel, angular_vel = lapf_planner.navigate_to_goal(
-                    pose=(current_x, current_y, current_theta_rad),
-                    goal=LAPF_GOAL_MM,
-                    obstacles=obstacles,
-                    dt=period,
-                )
-                robot.set_velocity(linear_vel, math.degrees(angular_vel))
 
         # ====================================================================
         # ASSEMBLY
@@ -370,39 +310,7 @@ def run(robot: Robot) -> None:
             print("[FSM] ASSEMBLY → MOVING")
 
         # ====================================================================
-        # DELIVERY
-        # ====================================================================
-        elif state == "DELIVERY":
-            print(f"[FSM] Delivering to Customer {detected_customer}...")
-            robot.set_led(LED.GREEN, 0)
-            robot.set_led(LED.ORANGE, 200)
-
-            try:
-                robot.deliver_burger(customer=detected_customer)
-                delivery_done = True
-                print("[FSM] Delivery complete — resuming path.")
-            except Exception as e:
-                print(f"[FSM] Delivery error: {e} — resuming anyway.")
-                delivery_done = True
-                try:
-                    robot.arm_safe_height()
-                    robot.arm_open_gripper()
-                    robot.arm_swing_to(0)
-                except Exception:
-                    pass
-
-            current_x, current_y, _ = robot.get_pose()
-            remaining_path = robot._advance_remaining_path(
-                remaining_path, current_x, current_y,
-                advance_radius_mm=LOOKAHEAD_DIST,
-            )
-
-            show_moving_leds(robot)
-            state = "MOVING"
-            print("[FSM] DELIVERY → MOVING")
-
-        # ====================================================================
-        # CUSTOMER_CHECKPOINT — 3-second face scan
+        # CUSTOMER_CHECKPOINT — 3-second face scan at (1325, 3460)
         # ====================================================================
         elif state == "CUSTOMER_CHECKPOINT":
             robot.stop()
@@ -422,19 +330,19 @@ def run(robot: Robot) -> None:
             if time.monotonic() - checkpoint_stop_start >= 3.0:
                 print(f"[DECISION] Target: Customer {detected_customer.upper()}")
                 target_x, target_y = DELIVERY_LOCATIONS[detected_customer]
-                print(f"[NAV] Routing via (2240, 3460) → ({target_x}, {target_y})")
+                print(f"[NAV] Routing to ({target_x}, {target_y})")
 
                 current_x, current_y, _ = robot.get_pose()
                 planner        = make_planner()
                 remaining_path = densify_polyline(
-                    [(current_x, current_y), (2240.0, 3460.0), (target_x, target_y)],
+                    [(current_x, current_y), (target_x, target_y)],
                     spacing=20.0,
                 )
                 checkpoint_done = True
                 state = "DELIVERY_MOVING"
 
         # ====================================================================
-        # DELIVERY_MOVING — scanning station → delivery drop-off
+        # DELIVERY_MOVING — checkpoint → delivery drop-off
         # ====================================================================
         elif state == "DELIVERY_MOVING":
             show_moving_leds(robot)
@@ -458,6 +366,38 @@ def run(robot: Robot) -> None:
                     max_linear=MAX_LINEAR_VEL,
                 )
                 robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
+
+        # ====================================================================
+        # DELIVERY
+        # ====================================================================
+        elif state == "DELIVERY":
+            print(f"[FSM] Delivering to Customer {detected_customer}...")
+            robot.set_led(LED.GREEN, 0)
+            robot.set_led(LED.ORANGE, 200)
+
+            try:
+                robot.deliver_burger(customer=detected_customer)
+                delivery_done = True
+                print("[FSM] Delivery complete.")
+            except Exception as e:
+                print(f"[FSM] Delivery error: {e} — resuming anyway.")
+                delivery_done = True
+                try:
+                    robot.arm_safe_height()
+                    robot.arm_open_gripper()
+                    robot.arm_swing_to(0)
+                except Exception:
+                    pass
+
+            current_x, current_y, _ = robot.get_pose()
+            planner        = make_planner()
+            remaining_path = densify_polyline(
+                [(current_x, current_y), (2240.0, 0.0)], spacing=20.0
+            )
+            stop_sign_detected = False
+            show_moving_leds(robot)
+            state = "FINAL_MOVING"
+            print("[FSM] DELIVERY → FINAL_MOVING")
 
         # ====================================================================
         # FINAL_MOVING — drop-off → home (2240, 0), with stop-sign check
