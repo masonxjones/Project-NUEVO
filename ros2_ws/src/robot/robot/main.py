@@ -10,6 +10,8 @@ from robot.util import densify_polyline
 from robot.path_planner import PurePursuitPlanner
 
 
+
+
 # ---------------------------------------------------------------------------
 # Robot build configuration
 # ---------------------------------------------------------------------------
@@ -17,8 +19,8 @@ from robot.path_planner import PurePursuitPlanner
 
 TAG_ID            = 11
 POSITION_UNIT     = Unit.MM
-WHEEL_DIAMETER    = 79.2
-WHEEL_BASE        = 251.3
+WHEEL_DIAMETER    = 76.2
+WHEEL_BASE        = 231.3
 INITIAL_THETA_DEG = 90.0
 
 
@@ -34,8 +36,8 @@ RIGHT_WHEEL_DIR_INVERTED = True
 
 
 LOOKAHEAD_DIST  = 100.0   # mm
-MAX_LINEAR_VEL  = 170.0   # mm/s
-MAX_ANGULAR_VEL = 2.5     # rad/s
+MAX_LINEAR_VEL  = 140.0   # mm/s
+MAX_ANGULAR_VEL = 1.5     # rad/s
 GOAL_TOLERANCE  = 20.0    # mm
 
 
@@ -44,7 +46,7 @@ GOAL_TOLERANCE  = 20.0    # mm
 # ---------------------------------------------------------------------------
 
 
-TRAFFIC_LIGHT_SWING_STEPS = -100
+TRAFFIC_LIGHT_SWING_STEPS = -150
 ELEVATOR_HOME = 0
 SWING_HOME    = 0
 
@@ -54,7 +56,7 @@ SWING_HOME    = 0
 # ---------------------------------------------------------------------------
 
 
-ASSEMBLY_TRIGGER_Y_MM  = 970.9
+ASSEMBLY_TRIGGER_Y_MM  = 842.9
 ASSEMBLY_TRIGGER_X_MAX = 50.0
 
 
@@ -63,7 +65,7 @@ ASSEMBLY_TRIGGER_X_MAX = 50.0
 # ---------------------------------------------------------------------------
 
 
-CHECKPOINT_TRIGGER_X_MIN = 1275.0
+CHECKPOINT_TRIGGER_X_MIN = 1175.0
 CHECKPOINT_TRIGGER_X_MAX = 1375.0
 CHECKPOINT_TRIGGER_Y_MIN = 3410.0
 CHECKPOINT_TRIGGER_Y_MAX = 3510.0
@@ -91,13 +93,13 @@ DELIVERY_LOCATIONS = {
 
 ALL_WAYPOINTS = [
     (0.0,    0.0),
-    (0,    3600.0),
-    (390.0,  3600.0),
-    (340.0,  740.0),
-    (1250.0, 750.0),
-    (1270.0, 3630.0),
-    (2100.0, 3630.0),
-    (2125.0, 0.0),
+    (0.0,    3560.0),
+    (410.0,  3550.0),
+    (410.0,  810.0),
+    (1335.0, 810.0),
+    (1338.0, 3530.0),
+    (1690.0, 3530.0),
+    (2000.0, 0.0),
 ]
 
 
@@ -153,7 +155,7 @@ def show_moving_leds(robot: Robot) -> None:
 
 def get_traffic_light(robot: Robot):
     for detection in robot.get_detections("traffic light"):
-        if float(detection.get("confidence", 0.0)) >= 0.20:
+        if float(detection.get("confidence", 0.0)) >= 0.50:
             color = detection.get("attributes", {}).get("color", {}).get("value")
             if color in ("red", "green"):
                 return color
@@ -164,7 +166,7 @@ def get_traffic_light(robot: Robot):
 
 def detect_stop_sign(robot: Robot) -> bool:
     for detection in robot.get_detections("stop sign"):
-        if float(detection.get("confidence", 0.0)) >= 0.20:
+        if float(detection.get("confidence", 0.0)) >= 0.50:
             return True
     return False
 
@@ -203,7 +205,7 @@ def run(robot: Robot) -> None:
     remaining_path: list               = []
 
 
-    assembly_done       = True
+    assembly_done       = False
     checkpoint_done     = False
     delivery_done       = False
     idle_arm_positioned = False
@@ -250,6 +252,7 @@ def run(robot: Robot) -> None:
             if not idle_arm_positioned:
                 try:
                     robot.arm_elevator_to(ELEVATOR_HOME)
+                    robot.arm_swing_to(TRAFFIC_LIGHT_SWING_STEPS)
                     idle_arm_positioned = True
                 except Exception as e:
                     print(f"[WARN] Arm swing failed: {e}")
@@ -258,6 +261,10 @@ def run(robot: Robot) -> None:
             if get_traffic_light(robot) == "green":
                 idle_arm_positioned = False
                 print("[VISION] Green detected — arming planner.")
+                try:
+                    robot.arm_swing_to(SWING_HOME)
+                except Exception as e:
+                    print(f"[WARN] Arm return home failed: {e}")
 
 
                 planner        = make_planner()
