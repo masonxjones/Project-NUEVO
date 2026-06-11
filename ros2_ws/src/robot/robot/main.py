@@ -8,11 +8,16 @@ from robot.hardware_map import (
     DEFAULT_FSM_HZ,
     LED,
     Motor,
+    LIDAR_FOV_DEG,
+    LIDAR_MOUNT_THETA_DEG,
+    LIDAR_MOUNT_X_MM,
+    LIDAR_MOUNT_Y_MM,
+    LIDAR_RANGE_MAX_MM,
+    LIDAR_RANGE_MIN_MM,
 )
-from robot.path_planner import PurePursuitPlanner
+from robot.path_planner import LeashedAPFPlanner, PurePursuitPlanner
 from robot.robot import FirmwareState, Robot, Unit
 from robot.util import densify_polyline
-
 
 # ---------------------------------------------------------------------------
 # Robot build configuration
@@ -80,48 +85,22 @@ LEG1A_WAYPOINTS = [
     (1275.0, 610.0),
 ]
 
-# Leg 1B: corridor — straight through with no obstacle avoidance (lidar disabled)
-LEG1B_WAYPOINTS = [
-    (1325.0,  810.0),
-    (1325.0, 3460.0),
-    (1800.0, 3460.0),
-]
-
 # ---------------------------------------------------------------------------
-# Lidar — DISABLED
-# All lidar / LAPF code commented out while debugging base navigation.
-# To re-enable: uncomment the lidar imports, configure_robot lidar block,
-# and replace MOVING_AVOID with the lapf_to_goal corridor logic.
+# Lidar / LAPF parameters
 # ---------------------------------------------------------------------------
 
-# from robot.hardware_map import (
-#     INITIAL_THETA_DEG,
-#     LIDAR_FOV_DEG,
-#     LIDAR_MOUNT_THETA_DEG,
-#     LIDAR_MOUNT_X_MM,
-#     LIDAR_MOUNT_Y_MM,
-#     LIDAR_RANGE_MAX_MM,
-#     LIDAR_RANGE_MIN_MM,
-#     POSITION_UNIT,
-#     TAG_BODY_OFFSET_X_MM,
-#     TAG_BODY_OFFSET_Y_MM,
-#     WHEEL_BASE,
-#     WHEEL_DIAMETER,
-# )
-#
-# LAPF_GOAL_MM        = (1800.0, 3460.0)
-# LAPF_VELOCITY_MM_S  = 140.0
-# LAPF_TOLERANCE_MM   = 50.0
-# LAPF_MAX_ANGULAR    = 1.5
-# LAPF_LEASH_MM       = 400.0
-# LAPF_REPULSION_MM   = 300.0
-# LAPF_TARGET_SPEED   = 200.0
-# LAPF_REPULSION_GAIN = 550.0
-# LAPF_ATTRACTION_GAIN= 1.0
-# LAPF_FORCE_EMA      = 0.35
-# LAPF_INFLATION_MM   = 130.0
-# LAPF_HALF_ANGLE_DEG = 25.0
-
+LAPF_GOAL_MM        = (1800.0, 3460.0)
+LAPF_VELOCITY_MM_S  = 140.0
+LAPF_TOLERANCE_MM   = 50.0
+LAPF_MAX_ANGULAR    = 1.5
+LAPF_LEASH_MM       = 400.0
+LAPF_REPULSION_MM   = 300.0
+LAPF_TARGET_SPEED   = 200.0
+LAPF_REPULSION_GAIN = 550.0
+LAPF_ATTRACTION_GAIN = 1.0
+LAPF_FORCE_EMA      = 0.35
+LAPF_INFLATION_MM   = 130.0
+LAPF_HALF_ANGLE_DEG = 25.0
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -140,21 +119,19 @@ def configure_robot(robot: Robot) -> None:
     )
     robot.set_tracked_tag_id(TAG_ID)
     robot.enable_vision()
-
-    # --- Lidar DISABLED ---
-    # robot.enable_lidar()
-    # robot.set_lidar_mount(
-    #     x_mm=LIDAR_MOUNT_X_MM,
-    #     y_mm=LIDAR_MOUNT_Y_MM,
-    #     theta_deg=LIDAR_MOUNT_THETA_DEG,
-    # )
-    # robot.set_lidar_filter(
-    #     range_min_mm=LIDAR_RANGE_MIN_MM,
-    #     range_max_mm=LIDAR_RANGE_MAX_MM,
-    #     fov_deg=LIDAR_FOV_DEG,
-    # )
-    # robot.start_lidar_world_publisher()
-    print("[sensor] lidar DISABLED — running pure pursuit only")
+    robot.enable_lidar()
+    robot.set_lidar_mount(
+        x_mm=LIDAR_MOUNT_X_MM,
+        y_mm=LIDAR_MOUNT_Y_MM,
+        theta_deg=LIDAR_MOUNT_THETA_DEG,
+    )
+    robot.set_lidar_filter(
+        range_min_mm=LIDAR_RANGE_MIN_MM,
+        range_max_mm=LIDAR_RANGE_MAX_MM,
+        fov_deg=LIDAR_FOV_DEG,
+    )
+    robot.start_lidar_world_publisher()
+    print("[sensor] lidar ENABLED — LAPF corridor avoidance active")
 
 
 def start_robot(robot: Robot) -> None:
@@ -204,6 +181,20 @@ def make_planner() -> PurePursuitPlanner:
 def run(robot: Robot) -> None:
     configure_robot(robot)
     start_robot(robot)
+
+    lapf_planner = LeashedAPFPlanner(
+        max_linear=LAPF_VELOCITY_MM_S,
+        max_angular=LAPF_MAX_ANGULAR,
+        target_speed=LAPF_TARGET_SPEED,
+        repulsion_gain=LAPF_REPULSION_GAIN,
+        repulsion_range=LAPF_REPULSION_MM,
+        attraction_gain=LAPF_ATTRACTION_GAIN,
+        force_ema_alpha=LAPF_FORCE_EMA,
+        leash_length_mm=LAPF_LEASH_MM,
+        leash_half_angle_deg=LAPF_HALF_ANGLE_DEG,
+        inflation_margin_mm=LAPF_INFLATION_MM,
+        goal_tolerance=LAPF_TOLERANCE_MM,
+    )
 
     robot.set_pos_fusion_alpha(0.10)
 
@@ -274,7 +265,7 @@ def run(robot: Robot) -> None:
                 state = "MOVING"
 
         # ====================================================================
-        # MOVING  — plain Pure Pursuit, Leg 1A
+        # MOVING — plain Pure Pursuit, Leg 1A
         # ====================================================================
         elif state == "MOVING":
             show_moving_leds(robot)
@@ -299,11 +290,9 @@ def run(robot: Robot) -> None:
                 )
 
                 if len(remaining_path) <= 1:
-                    print("[NAV] Leg 1A complete — entering corridor (no avoidance).")
+                    print("[NAV] Leg 1A complete — entering corridor (LAPF active).")
                     robot.stop()
-                    planner        = make_planner()
-                    remaining_path = densify_polyline(LEG1B_WAYPOINTS, spacing=20.0)
-                    print("[FSM] MOVING → MOVING_AVOID")
+                    lapf_planner.reset()
                     state = "MOVING_AVOID"
                 else:
                     linear_vel, angular_vel_rad = planner.compute_velocity(
@@ -314,7 +303,7 @@ def run(robot: Robot) -> None:
                     robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
 
         # ====================================================================
-        # MOVING_AVOID  — corridor, pure pursuit only (lidar disabled)
+        # MOVING_AVOID — corridor, LAPF with lidar
         # ====================================================================
         elif state == "MOVING_AVOID":
             show_moving_leds(robot)
@@ -322,23 +311,26 @@ def run(robot: Robot) -> None:
             current_x, current_y, current_theta_deg = robot.get_pose()
             current_theta_rad = math.radians(current_theta_deg)
 
-            remaining_path = robot._advance_remaining_path(
-                remaining_path, current_x, current_y,
-                advance_radius_mm=LOOKAHEAD_DIST,
+            dist_to_goal = math.hypot(
+                LAPF_GOAL_MM[0] - current_x,
+                LAPF_GOAL_MM[1] - current_y,
             )
 
-            if len(remaining_path) <= 1:
+            if dist_to_goal <= LAPF_TOLERANCE_MM:
                 print("[NAV] Corridor complete — arrived at scanning station.")
                 robot.stop()
+                lapf_planner.reset()
                 checkpoint_stop_start = time.monotonic()
                 state = "CUSTOMER_CHECKPOINT"
             else:
-                linear_vel, angular_vel_rad = planner.compute_velocity(
+                obstacles = robot.get_obstacle_tracks()
+                linear_vel, angular_vel = lapf_planner.navigate_to_goal(
                     pose=(current_x, current_y, current_theta_rad),
-                    waypoints=remaining_path,
-                    max_linear=MAX_LINEAR_VEL,
+                    goal=LAPF_GOAL_MM,
+                    obstacles=obstacles,
+                    dt=period,
                 )
-                robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
+                robot.set_velocity(linear_vel, math.degrees(angular_vel))
 
         # ====================================================================
         # ASSEMBLY
@@ -410,7 +402,7 @@ def run(robot: Robot) -> None:
             print("[FSM] DELIVERY → MOVING")
 
         # ====================================================================
-        # CUSTOMER_CHECKPOINT  — 3-second face scan
+        # CUSTOMER_CHECKPOINT — 3-second face scan
         # ====================================================================
         elif state == "CUSTOMER_CHECKPOINT":
             robot.stop()
@@ -442,7 +434,7 @@ def run(robot: Robot) -> None:
                 state = "DELIVERY_MOVING"
 
         # ====================================================================
-        # DELIVERY_MOVING  — scanning station → delivery drop-off
+        # DELIVERY_MOVING — scanning station → delivery drop-off
         # ====================================================================
         elif state == "DELIVERY_MOVING":
             show_moving_leds(robot)
@@ -456,15 +448,9 @@ def run(robot: Robot) -> None:
             )
 
             if len(remaining_path) <= 1:
-                print("[NAV] Delivery drop-off complete. Routing home (2240, 0).")
+                print("[NAV] Reached delivery drop-off — delivering burger.")
                 robot.stop()
-                current_x, current_y, _ = robot.get_pose()
-                planner        = make_planner()
-                remaining_path = densify_polyline(
-                    [(current_x, current_y), (2240.0, 0.0)], spacing=20.0
-                )
-                stop_sign_detected = False
-                state = "FINAL_MOVING"
+                state = "DELIVERY"
             else:
                 linear_vel, angular_vel_rad = planner.compute_velocity(
                     pose=(current_x, current_y, current_theta_rad),
@@ -474,7 +460,7 @@ def run(robot: Robot) -> None:
                 robot.set_velocity(linear_vel, math.degrees(angular_vel_rad))
 
         # ====================================================================
-        # FINAL_MOVING  — drop-off → home (2240, 0), with stop-sign check
+        # FINAL_MOVING — drop-off → home (2240, 0), with stop-sign check
         # ====================================================================
         elif state == "FINAL_MOVING":
 
