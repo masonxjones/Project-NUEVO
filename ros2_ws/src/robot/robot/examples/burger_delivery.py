@@ -42,6 +42,8 @@ from __future__ import annotations
 import time
 import math
 # Re-use the same arm constants as assembly so nothing goes out of sync
+# robot/robot_impl/burger_delivery.py
+
 from robot.robot_impl.burger_assembly import (
     SWING_HOME,
     SWING_PICK_STEPS,
@@ -55,9 +57,9 @@ from robot.robot_impl.burger_assembly import (
     STEPPER_MOVE_TIMEOUT_S,
     STEPPER_SETTLE_S,
     GRIP_SETTLE_S,
+    DRIVE_SPEED_MM_S,          # <-- ADD THIS
+    APPROACH_TURN_SPEED_DPS,   # <-- ADD THIS
 )
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # DELIVERY-SPECIFIC TUNABLE CONSTANTS
 # ════════════════════════════════════════════════════════════════════════════
@@ -304,7 +306,8 @@ class BurgerDeliveryMixin:
             )
 
         self._delivery_log("═══ Burger delivery START ═══")
-
+        self._step_enable(STEPPER_ELEVATOR, True)
+        self._step_enable(STEPPER_SWING, True)
 
         # ── Step 2: Drive forward to drop zone ───────────────────────────────
         # Arm must be at home (elevator=0, swing=0) before driving

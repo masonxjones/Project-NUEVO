@@ -17,8 +17,8 @@ from robot.path_planner import PurePursuitPlanner
 
 TAG_ID            = 11
 POSITION_UNIT     = Unit.MM
-WHEEL_DIAMETER    = 76.2
-WHEEL_BASE        = 221.3
+WHEEL_DIAMETER    = 79.2
+WHEEL_BASE        = 251.3
 INITIAL_THETA_DEG = 90.0
 
 
@@ -34,8 +34,8 @@ RIGHT_WHEEL_DIR_INVERTED = True
 
 
 LOOKAHEAD_DIST  = 100.0   # mm
-MAX_LINEAR_VEL  = 140.0   # mm/s
-MAX_ANGULAR_VEL = 1.5     # rad/s
+MAX_LINEAR_VEL  = 170.0   # mm/s
+MAX_ANGULAR_VEL = 2.5     # rad/s
 GOAL_TOLERANCE  = 20.0    # mm
 
 
@@ -91,13 +91,13 @@ DELIVERY_LOCATIONS = {
 
 ALL_WAYPOINTS = [
     (0.0,    0.0),
-    (0,    3590.0),
-    (400.0,  3590.0),
-    (400.0,  780.0),
-    (1315.0, 780.0),
-    (1320.0, 3590.0),
-    (2260.0, 3590.0),
-    (2270.0, 0.0),
+    (0,    3600.0),
+    (390.0,  3600.0),
+    (340.0,  740.0),
+    (1250.0, 750.0),
+    (1270.0, 3630.0),
+    (2100.0, 3630.0),
+    (2125.0, 0.0),
 ]
 
 
@@ -153,7 +153,7 @@ def show_moving_leds(robot: Robot) -> None:
 
 def get_traffic_light(robot: Robot):
     for detection in robot.get_detections("traffic light"):
-        if float(detection.get("confidence", 0.0)) >= 0.30:
+        if float(detection.get("confidence", 0.0)) >= 0.20:
             color = detection.get("attributes", {}).get("color", {}).get("value")
             if color in ("red", "green"):
                 return color
@@ -164,7 +164,7 @@ def get_traffic_light(robot: Robot):
 
 def detect_stop_sign(robot: Robot) -> bool:
     for detection in robot.get_detections("stop sign"):
-        if float(detection.get("confidence", 0.0)) >= 0.30:
+        if float(detection.get("confidence", 0.0)) >= 0.20:
             return True
     return False
 
@@ -203,7 +203,7 @@ def run(robot: Robot) -> None:
     remaining_path: list               = []
 
 
-    assembly_done       = False
+    assembly_done       = True
     checkpoint_done     = False
     delivery_done       = False
     idle_arm_positioned = False
