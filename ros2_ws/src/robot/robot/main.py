@@ -152,7 +152,7 @@ def show_moving_leds(robot: Robot) -> None:
 
 def get_traffic_light(robot: Robot):
     for detection in robot.get_detections("traffic light"):
-        if float(detection.get("confidence", 0.0)) >= 0.50:
+        if float(detection.get("confidence", 0.0)) >= 0.40:
             color = detection.get("attributes", {}).get("color", {}).get("value")
             if color in ("red", "green"):
                 return color
@@ -161,7 +161,7 @@ def get_traffic_light(robot: Robot):
 
 def detect_stop_sign(robot: Robot) -> bool:
     for detection in robot.get_detections("stop sign"):
-        if float(detection.get("confidence", 0.0)) >= 0.50:
+        if float(detection.get("confidence", 0.0)) >= 0.40:
             return True
     return False
 
