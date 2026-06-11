@@ -68,7 +68,7 @@ CUSTOMER_B_DRIVE_MM     = 1535.0   # ← TUNE: mm to drive forward for Customer 
 CUSTOMER_UNKNOWN_DRIVE_MM = 1900.0 # ← TUNE: fallback if customer not identified
 
 # ── Arm position for delivery (mirrors assembly) ──────────────────────────
-DELIVERY_SWING_STEPS    = SWING_PICK_STEPS   # -420 — same side as assembly table
+DELIVERY_SWING_STEPS    = -420  # -420 — same side as assembly table
                                               # ← TUNE if delivery side differs
 
 # ── Elevator depth to release burger ─────────────────────────────────────
@@ -305,9 +305,6 @@ class BurgerDeliveryMixin:
 
         self._delivery_log("═══ Burger delivery START ═══")
 
-        # Ensure steppers are enabled
-        self._step_enable(STEPPER_ELEVATOR, True)
-        self._step_enable(STEPPER_SWING, True)
 
         # ── Step 2: Drive forward to drop zone ───────────────────────────────
         # Arm must be at home (elevator=0, swing=0) before driving
@@ -324,6 +321,7 @@ class BurgerDeliveryMixin:
         self._delivery_log(
             f"── Step 3/5: Lower elevator to {DELIVERY_DROP_STEPS} steps ──"
         )
+      
         self.arm_elevator_to(DELIVERY_DROP_STEPS)  # ← TUNE DELIVERY_DROP_STEPS
 
         # ── Step 5: Release burger ────────────────────────────────────────────
