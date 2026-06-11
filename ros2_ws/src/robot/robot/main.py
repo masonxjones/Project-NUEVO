@@ -15,7 +15,7 @@ from robot.path_planner import PurePursuitPlanner
 TAG_ID            = 11
 POSITION_UNIT     = Unit.MM
 WHEEL_DIAMETER    = 76.2
-WHEEL_BASE        = 251.3
+WHEEL_BASE        = 241.3
 INITIAL_THETA_DEG = 90.0
 
 LEFT_WHEEL_MOTOR         = Motor.DC_M1
@@ -36,7 +36,7 @@ GOAL_TOLERANCE  = 20.0    # mm
 # Arm / assembly constants
 # ---------------------------------------------------------------------------
 
-TRAFFIC_LIGHT_SWING_STEPS = -150
+TRAFFIC_LIGHT_SWING_STEPS = -100
 ELEVATOR_HOME = 0
 SWING_HOME    = 0
 
@@ -74,11 +74,11 @@ DELIVERY_LOCATIONS = {
 
 ALL_WAYPOINTS = [
     (0.0,    0.0),
-    (0.0,    3560.0),
-    (410.0,  3550.0),
-    (410.0,  810.0),
-    (1335.0, 810.0),
-    (1338.0, 3530.0),
+    (0,    3560.0),
+    (400.0,  3550.0),
+    (400.0,  790.0),
+    (1315.0, 790.0),
+    (1320.0, 3530.0),
     (2260.0, 3530.0),
     (2250.0, 0.0),
 ]
