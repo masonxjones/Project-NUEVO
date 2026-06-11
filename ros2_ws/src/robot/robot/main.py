@@ -15,11 +15,7 @@ from robot.path_planner import PurePursuitPlanner
 TAG_ID            = 11
 POSITION_UNIT     = Unit.MM
 WHEEL_DIAMETER    = 76.2
-<<<<<<< HEAD
 WHEEL_BASE        = 241.3
-=======
-WHEEL_BASE        = 231.3
->>>>>>> 862462a353ec667a9a822f24d1ec9e29b0baf8eb
 INITIAL_THETA_DEG = 90.0
 
 LEFT_WHEEL_MOTOR         = Motor.DC_M1
@@ -210,7 +206,6 @@ def run(robot: Robot) -> None:
             if not idle_arm_positioned:
                 try:
                     robot.arm_elevator_to(ELEVATOR_HOME)
-                    robot.arm_swing_to(TRAFFIC_LIGHT_SWING_STEPS)
                     idle_arm_positioned = True
                 except Exception as e:
                     print(f"[WARN] Arm swing failed: {e}")
@@ -218,10 +213,6 @@ def run(robot: Robot) -> None:
             if get_traffic_light(robot) == "green":
                 idle_arm_positioned = False
                 print("[VISION] Green detected — arming planner.")
-                try:
-                    robot.arm_swing_to(SWING_HOME)
-                except Exception as e:
-                    print(f"[WARN] Arm return home failed: {e}")
 
                 planner        = make_planner()
                 remaining_path = densify_polyline(ALL_WAYPOINTS, spacing=20.0)
