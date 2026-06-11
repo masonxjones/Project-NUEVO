@@ -386,7 +386,7 @@ def run(robot: Robot) -> None:
             robot.set_led(LED.ORANGE, 200)
 
             try:
-                robot.deliver_burger(ASSEMBLY=True)
+                robot.deliver_burger(customer=detected_customer)
                 delivery_done = True
                 print("[FSM] Delivery complete — resuming path.")
             except Exception as e:
