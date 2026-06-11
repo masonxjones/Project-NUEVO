@@ -15,7 +15,7 @@ from robot.path_planner import PurePursuitPlanner
 TAG_ID            = 11
 POSITION_UNIT     = Unit.MM
 WHEEL_DIAMETER    = 76.2
-WHEEL_BASE        = 251.3
+WHEEL_BASE        = 231.3
 INITIAL_THETA_DEG = 90.0
 
 LEFT_WHEEL_MOTOR         = Motor.DC_M1
